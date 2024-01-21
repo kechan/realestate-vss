@@ -6,60 +6,39 @@
   position: relative;
 }
 
-.btn-container {
-  position: relative;
-  display: inline-block;
-}
-
-/* the button that said "Upload a file" (not using for now)*/
-.btn {
-  border: 2px solid #a51c21;
-  /* background-color: #007bff; */
-  background-color: #D2232A;
-  color: white;
-  padding: 10px 15px;
-  border-radius: 5px;
-  cursor: pointer;
+/* Placeholder for Drag an image here or */
+.drag-text {
+  color: #4a4a4a; /* A darker shade of gray */
+  font-family: Arial, sans-serif;
   font-size: 16px;
-  position: relative;  /* Position relative to allow absolute positioning of the file input */
+  margin-right: -10px;
+  text-decoration: line-through;
 }
 
-/* the hyperlink that said "Upload a file" */
-.file-input-presentation {
-  background-color: transparent;
-  color: #D2232A; 
-  cursor: pointer;
+/* the hyperlink that said 'Upload a file'" */
+.upload-link {
   text-decoration: underline;
-  font-size: 16px;
-  border: none;
-  padding: 0;
-  display: inline; /* or block, depending on layout */
-  transition: color 0.3s ease; /* Smooth transition for color change */
-
+  color: #D2232A; /* Your theme's red accent color */
+  cursor: pointer;
+  font-family: Arial, sans-serif; /* Set the font to Arial */
+  font-size: 16px; /* Set the font size to 16px */
+  margin-left: 5px; /* Adjust the left margin if more space is needed */
 }
 
-.file-input-presentation:hover,
-.file-input-presentation:focus {
-  color: #A81B22;
+.upload-link:hover,
+.upload-link:focus {
+  color: #A81B22; /* A darker shade of your theme color for hover effect */
   text-decoration: none;
-  cursor: pointer;
 }
 
 
 .file-input {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-
-  /* z-index: 2; */
+  /* Make sure this is still hidden */
+  display: none;
 }
 
 .thumbnail {
-  max-width: 100px;
-  max-height: 100px;
+  max-width: 350px;
+  max-height: 350px;
   object-fit: contain;
 }

@@ -13,11 +13,17 @@ export default function FileUpload({ onFileChange }) {
 
   return (
     <div className={styles['file-upload-container']}>
-      <div className={styles['btn-container']}>
-        {/* <button className={styles.btn}>Choose File</button> */}
-        <label className={styles['file-input-presentation']}>Upload an image</label>
-        <input type="file" name="myfile" onChange={handleFileChange} className={styles['file-input']} />
-      </div>
+        <span className={styles['drag-text']}>Drag an image here or</span>
+        <label htmlFor="file-upload" className={styles['upload-link']}>
+          upload a file
+        </label>
+        <input
+          id="file-upload"
+          type="file"
+          onChange={handleFileChange}
+          className={styles['file-input']}
+          style={{ display: 'none' }}
+        />
       {selectedFileUrl && <img src={selectedFileUrl} alt="Selected" className={styles.thumbnail} />}
     </div>
   );
