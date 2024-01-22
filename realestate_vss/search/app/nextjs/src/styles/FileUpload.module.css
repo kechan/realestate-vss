@@ -1,9 +1,40 @@
 .file-upload-container {
   display: flex;
-  align-items: flex-end;
+  /* align-items: flex-end; */
+  align-items: center;
+  justify-content: center;
   gap: 10px;
 
+  min-height: 200px; /* Minimum height for the drag-and-drop zone */
+  min-width: 600px; /* Minimum width for the drag-and-drop zone, adjust as needed */
+  border: 2px dashed #ccc; /* A default light border to indicate the drag zone */
+
+  box-shadow: 0 0 10px 0 rgba(210, 35, 42, 0.2); /* Optional: a lighter shadow by default */
+  background-color: #fff; /* Background color */
+
   position: relative;
+  transition: border-color 0.3s ease-in-out, box-shadow 0.3s ease-in-out; /* Smooth transition for visual feedback */
+}
+
+  /* Style for when a file is dragged over the container */
+.file-upload-container.drag-over {
+  border-color: #D2232A; /* Highlight color when dragging over */
+  border-style: dashed; /* Optional: dashed style */
+  border-width: 2px; /* Thickness of the border */
+  box-shadow: 0 0 10px 0 rgba(210, 35, 42, 0.5); /* Shadow effect for depth */
+  background-color: rgba(255, 255, 255, 0.7); /* Slightly see-through white background */
+}
+
+/* Add some visual cue that makes it obvious it's an active drop target */
+.drag-over .drag-text,
+.drag-over .upload-link {
+  color: #D2232A; /* Change text color when dragging over */
+}
+
+/* Optional: Add styles for the thumbnail to change or hide it during drag-over */
+.file-upload-container.drag-over .thumbnail {
+  /* Styles to alter or hide the thumbnail when dragging over */
+  opacity: 0.5; /* Example: make the thumbnail semi-transparent */
 }
 
 /* Placeholder for Drag an image here or */
@@ -11,8 +42,9 @@
   color: #4a4a4a; /* A darker shade of gray */
   font-family: Arial, sans-serif;
   font-size: 16px;
-  margin-right: -10px;
-  text-decoration: line-through;
+  padding: 0 16px;
+  /* margin-right: -10px; */
+  /* text-decoration: line-through; */
 }
 
 /* the hyperlink that said 'Upload a file'" */
@@ -41,4 +73,5 @@
   max-width: 350px;
   max-height: 350px;
   object-fit: contain;
+  margin: 10px;
 }
