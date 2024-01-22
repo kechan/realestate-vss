@@ -4,7 +4,6 @@ import SearchResults from './SearchResults';
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState(null);
-  // const [selectedFileUrl, setSelectedFileUrl] = useState(null); 
   const [searchResults, setSearchResults] = useState([]);
 
   const bannerRef = useRef(null);
@@ -18,7 +17,7 @@ export default function Home() {
     setSelectedFile(file);
   }
 
-  // Function to handle form submission
+  // Function to handle form submission for file upload
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!selectedFile) {
@@ -41,6 +40,9 @@ export default function Home() {
       console.error('Error:', error);
     }
   };
+
+  // Determine the class for the search-container based on presence or absence of search results
+  const searchContainerClass = searchResults.length > 0 ? "search-container-tighter" : "search-container";
 
   return (
     <>
@@ -78,13 +80,14 @@ export default function Home() {
     </div>
 
     <div className="container" style={{ paddingTop: bannerHeight + 10}}>
-      <FileUpload onFileChange={handleFileChange} />
-      
-      <button className="search-btn" onClick={handleSubmit}>Search</button>
+      <div className={searchContainerClass}>
+        <FileUpload onFileChange={handleFileChange} />      
+        <button className="search-btn" onClick={handleSubmit}>Search</button>      
+      </div>
 
-      {/* Display search results */}
-      {searchResults.length > 0 && <SearchResults searchResults={searchResults} />}
-      
+    {/* Display search results */}
+    {searchResults.length > 0 && <SearchResults searchResults={searchResults} />}
+
     <style jsx>{`
       .container {
         display: flex;
@@ -94,6 +97,29 @@ export default function Home() {
         min-height: 100vh;
         background-color: #f7f7f7;
         // padding-top: 100px; // Add a top padding
+      }
+
+      .search-container {
+        background: #fff;
+        border-radius: 24px;
+        box-shadow: 0px 4px 6px rgba(32, 33, 36, 0.28);
+        padding: 20px;
+        margin: 20px auto;
+        max-width: 600px; /* Adjust width as needed */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .search-container-tighter {
+        border-radius: 24px;
+        box-shadow: 0px 4px 6px rgba(32, 33, 36, 0.28);
+        padding: 15px;
+        margin: 10px auto;
+        max-width: 600px; /* Adjust width as needed */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
       }
 
       .search-btn {
@@ -113,6 +139,7 @@ export default function Home() {
       }
     `}</style>
 
+    
     </div>
 
     </>
