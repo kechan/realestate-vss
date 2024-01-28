@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
+import TextSearch from './TextSearch';
 import FileUpload from './FileUpload';
 import SearchResults from './SearchResults'; 
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
   const bannerRef = useRef(null);
@@ -16,6 +18,15 @@ export default function Home() {
   const handleFileChange = (file) => {
     setSelectedFile(file);
   }
+
+  const handleSearchTermChange = (newSearchTerm) => {
+    setSearchTerm(newSearchTerm);
+  };
+
+  const handleSearchSubmit = async () => {
+    // Implement search logic here
+    console.log('Search submitted:', searchTerm);
+  };
 
   // Function to handle form submission for file upload
   const handleSubmit = async (event) => {
@@ -81,8 +92,15 @@ export default function Home() {
 
     <div className="container" style={{ paddingTop: bannerHeight + 10}}>
       <div className={searchContainerClass}>
-        <FileUpload onFileChange={handleFileChange} />      
-        <button className="search-btn" onClick={handleSubmit}>Search</button>      
+        <FileUpload onFileChange={handleFileChange} />
+        <div className="text-and-button">
+          <TextSearch 
+            searchTerm={searchTerm}
+            onSearchTermChange={handleSearchTermChange}
+            onSearchSubmit={handleSearchSubmit}
+          />
+          <button className="search-btn" onClick={handleSubmit}>Search</button>
+        </div>      
       </div>
 
     {/* Display search results */}
@@ -131,11 +149,18 @@ export default function Home() {
         border-radius: 5px;
         cursor: pointer;
         font-size: 16px;
-        margin-top: 10px; // Add some space between the buttons
+        // margin-top: 10px; // Add some space between the buttons
       }
 
       .search-btn:hover {
         background-color: #A81B22;
+      }
+
+      .text-and-button {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 20px; /* Adjust as needed for spacing */
       }
     `}</style>
 

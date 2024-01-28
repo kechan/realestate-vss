@@ -191,6 +191,29 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
       raise HTTPException(status_code=404, detail="Image not found")
   return FileResponse(image_path)
 
+@app.post("/search-by-text/")
+async def search_by_text(query: Dict):
+  
+  phrase = query.get('phrase', None)
+  # remove key phrase from query
+  del query['phrase']
+
+  provState = query.get('provState', None)
+  
+  print(f'query: {query}')
+  if provState is None:
+    raise HTTPException(status_code=404, detail="provState must be provided")
+
+  # TODO: doing VSS_ONLY for now, but need to account for other search modes
+  # results = search_engine.text_search(SearchMode.SOFT_MATCH_AND_VSS, topk=10, return_df=False, lambda_val=0.8, alpha_val=0.5, phrase=phrase, **query)
+  results = search_engine.text_search(SearchMode.VSS_ONLY, topk=10, phrase=phrase, return_df=False, **query)
+
+  # convert numpy array to list
+  for result in results:
+    for key, value in result.items():
+      if isinstance(value, np.ndarray):
+        result[key] = value.tolist()
+  return results
 
 # for testing before UI is built
 @app.post("/search-by-image-html/", response_class=HTMLResponse)

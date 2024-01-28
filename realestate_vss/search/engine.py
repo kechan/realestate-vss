@@ -49,7 +49,7 @@ class ListingSearchEngine:
       self.faiss_text_index[provState] = self._build_faiss_index(text_embeddings)
 
 
-  def text_search(self, mode: SearchMode, topk=50, return_df=True, lambda_val=None, alpha_val=None, **query) -> pd.DataFrame:
+  def text_search(self, mode: SearchMode, topk=50, return_df=True, lambda_val=None, alpha_val=None, **query) -> Union[pd.DataFrame, List[Dict]]:    
     '''
     query: Dict with search attributes. Key of 'phrase' will use VSS r.p.t. to listing remarks
     lambda_val and alpha_val are used for only soft match + vss mode
@@ -137,12 +137,17 @@ class ListingSearchEngine:
     else:
       raise ValueError(f'Unknown search mode {mode}')
 
-    
-
-    return join_df(
+    result_df = join_df(
         pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
         self.text_embeddings_df_by_prov[provState], 
         left_on='jumpId', how='inner')
+    
+    if return_df:
+      return result_df
+    else:
+      # remove listing_id and embedding columns from results_df before returning the List[Dict]
+      result_df = result_df.drop(columns=['jumpId', 'embedding'])
+      return result_df.to_dict('records')
 
   def image_search(self, image: Image, topk=5) -> Tuple[List[str], List[float]]:
     '''

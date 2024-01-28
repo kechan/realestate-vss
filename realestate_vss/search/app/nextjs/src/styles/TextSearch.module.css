@@ -1,0 +1,27 @@
+.text-search-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.text-input {
+  background-color: #fff; /* White background */
+  color: #333; /* Set the text color to something visible, e.g., dark gray */
+  padding: 8px 12px;
+  border: 2px solid #ccc; /* Light grey border */
+  border-radius: 4px; /* Slightly rounded corners for the input field */
+  font-size: 16px; /* Matching font size to your theme */
+  width: 100%; /* Full width */
+  max-width: 400px; /* Maximum width, adjust as needed */
+  box-sizing: border-box; /* Ensures padding doesn't affect overall width */
+  margin-right: 10px;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: #D2232A; /* Highlight color when the input is focused */
+  box-shadow: 0 0 0 2px rgba(210, 35, 42, 0.2); /* A light box-shadow that matches your theme color */
+}
+
