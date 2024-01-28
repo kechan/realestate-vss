@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import TextSearch from './TextSearch';
 import FileUpload from './FileUpload';
-import SearchResults from './SearchResults'; 
+import ImageSearchResults from './ImageSearchResults'; 
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -23,32 +23,62 @@ export default function Home() {
     setSearchTerm(newSearchTerm);
   };
 
-  const handleSearchSubmit = async () => {
-    // Implement search logic here
-    console.log('Search submitted:', searchTerm);
+  const handleTextSearchSubmit = async (event) => {
+    // console.log('Search submitted:', searchTerm);
+    event.preventDefault();
+    handleSubmit(event);
   };
 
   // Function to handle form submission for file upload
   const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!selectedFile) {
-      alert('Please select a file first!');
+    if (!selectedFile && !searchTerm) {
+      alert('Please select a file or enter a search term.');
       return;
     }
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
+    if (selectedFile) {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
 
-    try {
-      const response = await fetch('http://localhost:8000/search-by-image/', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await response.json();
+      try {
+        const response = await fetch('http://localhost:8000/search-by-image/', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
 
-      setSearchResults(data); // Update the state with the search results
-    } catch (error) {
-      console.error('Error:', error);
+        data.searchType = 'image'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
+
+    if (searchTerm) {
+      // console.log('Search submitted:', searchTerm);
+      // implement search by text
+      const input_payload = {
+        provState: "ON",    // hard-coded for now
+        phrase: searchTerm
+      }
+
+      try {
+        const response = await fetch('http://localhost:8000/search-by-text/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(input_payload)
+        });
+        const data = await response.json();
+
+        // console.log('data:', data);
+        data.searchType = 'text'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);
+      }
     }
   };
 
@@ -97,14 +127,14 @@ export default function Home() {
           <TextSearch 
             searchTerm={searchTerm}
             onSearchTermChange={handleSearchTermChange}
-            onSearchSubmit={handleSearchSubmit}
+            onSearchSubmit={handleTextSearchSubmit}
           />
           <button className="search-btn" onClick={handleSubmit}>Search</button>
         </div>      
       </div>
 
     {/* Display search results */}
-    {searchResults.length > 0 && <SearchResults searchResults={searchResults} />}
+    {searchResults.length > 0 && <ImageSearchResults searchResults={searchResults} />}
 
     <style jsx>{`
       .container {

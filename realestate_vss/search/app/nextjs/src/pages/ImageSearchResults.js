@@ -1,7 +1,7 @@
 import React from 'react';
-import styles from '../styles/SearchResults.module.css';
+import styles from '../styles/ImageSearchResults.module.css';
 
-export default function SearchResults({ searchResults }) {
+export default function ImageSearchResults({ searchResults }) {
   return (
     <div className={styles['search-results']}>
       <div className={styles['search-results-header']}>

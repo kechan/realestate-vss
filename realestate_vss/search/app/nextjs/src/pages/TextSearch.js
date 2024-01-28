@@ -8,7 +8,9 @@ export default function TextSearch({ searchTerm, onSearchTermChange, onSearchSub
     // Check if the key pressed is "Enter"
     if (e.key === 'Enter') {
       // If it is, call the onSearchSubmit function passed via props.
-      onSearchSubmit(e.target.value);
+      // onSearchSubmit(e.target.value);
+      e.preventDefault();
+      onSearchSubmit(e);
     }
   };
 
