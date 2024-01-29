@@ -206,6 +206,7 @@ export default function Home() {
         align-items: center;
         gap: 10px;
         margin-top: 20px; /* Adjust as needed for spacing */
+        width: 80%;
       }
     `}</style>
 
