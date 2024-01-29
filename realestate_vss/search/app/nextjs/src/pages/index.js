@@ -2,9 +2,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import TextSearch from './TextSearch';
 import FileUpload from './FileUpload';
 import ImageSearchResults from './ImageSearchResults'; 
+import TextSearchResults from './TextSearchResults';
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFileUrl, setSelectedFileUrl] = useState(null);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
@@ -17,21 +20,31 @@ export default function Home() {
 
   const handleFileChange = (file) => {
     setSelectedFile(file);
+    // Clear the searchTerm when a file is selected for upload
+    if (searchTerm) setSearchTerm('');
+    setSelectedFileUrl(file ? URL.createObjectURL(file) : null);
   }
 
   const handleSearchTermChange = (newSearchTerm) => {
     setSearchTerm(newSearchTerm);
+    // Clear the selectedFile when a searchTerm is entered
+    if (selectedFile) {
+      setSelectedFile(null);
+      setSelectedFileUrl(null);
+    }
   };
 
   const handleTextSearchSubmit = async (event) => {
     // console.log('Search submitted:', searchTerm);
     event.preventDefault();
+    // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
     handleSubmit(event);
   };
 
   // Function to handle form submission for file upload
   const handleSubmit = async (event) => {
     event.preventDefault();
+    // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
     if (!selectedFile && !searchTerm) {
       alert('Please select a file or enter a search term.');
       return;
@@ -91,7 +104,7 @@ export default function Home() {
       <svg className="logo" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="2" fill="white" />
       </svg>
-      <h1 className="app-name">Listing Image Search</h1>
+      <h1 className="app-name">Listing Image or Semantic Search</h1>
 
       <style jsx>{`
         .banner {
@@ -122,7 +135,7 @@ export default function Home() {
 
     <div className="container" style={{ paddingTop: bannerHeight + 10}}>
       <div className={searchContainerClass}>
-        <FileUpload onFileChange={handleFileChange} />
+        <FileUpload onFileChange={handleFileChange} selectedFileUrl={selectedFileUrl}/>
         <div className="text-and-button">
           <TextSearch 
             searchTerm={searchTerm}
@@ -134,9 +147,11 @@ export default function Home() {
       </div>
 
     {/* Display search results */}
-    {searchResults.length > 0 && <ImageSearchResults searchResults={searchResults} />}
+    {searchResults.length > 0 && searchResults.searchType === 'image' && <ImageSearchResults searchResults={searchResults} />}
+    {searchResults.length > 0 && searchResults.searchType === 'text' && <TextSearchResults searchResults={searchResults} />}
 
     <style jsx>{`
+   
       .container {
         display: flex;
         flex-direction: column;

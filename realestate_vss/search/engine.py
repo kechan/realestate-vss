@@ -147,7 +147,14 @@ class ListingSearchEngine:
     else:
       # remove listing_id and embedding columns from results_df before returning the List[Dict]
       result_df = result_df.drop(columns=['jumpId', 'embedding'])
-      return result_df.to_dict('records')
+      result_dict = result_df.to_dict('records')
+      # Convert all values to strings
+      for item in result_dict:
+        for key, value in item.items():
+          if key != 'score':
+            item[key] = str(value)
+
+      return result_dict
 
   def image_search(self, image: Image, topk=5) -> Tuple[List[str], List[float]]:
     '''

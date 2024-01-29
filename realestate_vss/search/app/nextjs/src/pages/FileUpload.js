@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
 import styles from '../styles/FileUpload.module.css';
 
-export default function FileUpload({ onFileChange }) {
+export default function FileUpload({ onFileChange, selectedFileUrl }) {
   const [selectedFile, setSelectedFile] = useState(null);
-  const [selectedFileUrl, setSelectedFileUrl] = useState(null);
+  // const [selectedFileUrl, setSelectedFileUrl] = useState(null);
   const [dragOver, setDragOver] = useState(false);
 
   const handleDragOver = useCallback((event) => {
@@ -23,7 +23,7 @@ export default function FileUpload({ onFileChange }) {
     if (event.dataTransfer.files && event.dataTransfer.files[0]) {
       const file = event.dataTransfer.files[0];
       setSelectedFile(file);
-      setSelectedFileUrl(URL.createObjectURL(file));
+      // setSelectedFileUrl(URL.createObjectURL(file));
       onFileChange(file);
     }
   }, [onFileChange]);
@@ -31,7 +31,7 @@ export default function FileUpload({ onFileChange }) {
   const handleFileChange = (event) => {
     const file = event.target.files[0];
     setSelectedFile(file);
-    setSelectedFileUrl(URL.createObjectURL(file));
+    // setSelectedFileUrl(URL.createObjectURL(file));
     onFileChange(file);
   };
 

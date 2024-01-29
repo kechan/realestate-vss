@@ -10,7 +10,7 @@ from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 
 from concurrent.futures import ThreadPoolExecutor
-import asyncio, io
+import asyncio, io, json
 import torch
 from pathlib import Path
 import pandas as pd
@@ -207,12 +207,6 @@ async def search_by_text(query: Dict):
   # TODO: doing VSS_ONLY for now, but need to account for other search modes
   # results = search_engine.text_search(SearchMode.SOFT_MATCH_AND_VSS, topk=10, return_df=False, lambda_val=0.8, alpha_val=0.5, phrase=phrase, **query)
   results = search_engine.text_search(SearchMode.VSS_ONLY, topk=10, phrase=phrase, return_df=False, **query)
-
-  # convert numpy array to list
-  for result in results:
-    for key, value in result.items():
-      if isinstance(value, np.ndarray):
-        result[key] = value.tolist()
   return results
 
 # for testing before UI is built
