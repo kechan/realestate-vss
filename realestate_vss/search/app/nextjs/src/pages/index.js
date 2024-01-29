@@ -50,12 +50,15 @@ export default function Home() {
       return;
     }
 
+    const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
+    console.log('apiURL:', apiURL);
+
     if (selectedFile) {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
       try {
-        const response = await fetch('http://localhost:8000/search-by-image/', {
+        const response = await fetch(`${apiURL}/search-by-image/`, {
           method: 'POST',
           body: formData,
         });
@@ -69,15 +72,14 @@ export default function Home() {
     }
 
     if (searchTerm) {
-      // console.log('Search submitted:', searchTerm);
       // implement search by text
       const input_payload = {
-        provState: "ON",    // hard-coded for now
+        provState: "ON",    // TODO: hard-coded for now, need to change later
         phrase: searchTerm
       }
 
       try {
-        const response = await fetch('http://localhost:8000/search-by-text/', {
+        const response = await fetch(`${apiURL}/search-by-text/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
