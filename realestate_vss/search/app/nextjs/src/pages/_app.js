@@ -1,11 +1,19 @@
 import '@/styles/globals.css'
 import Head from 'next/head'
 
-// export default function App({ Component, pageProps }) {
-//   return <Component {...pageProps} />
-// }
+import React, { useRef, useEffect, useState } from 'react';
+import Banner from './Banner' 
 
 export default function App({ Component, pageProps }) {
+  const bannerRef = useRef(null);
+  const [bannerHeight, setBannerHeight] = useState(0);
+
+  useEffect(() => {
+    if (bannerRef.current) {
+      setBannerHeight(bannerRef.current.offsetHeight);
+    }
+  }, []);
+
   return (
     <>
       <Head>
@@ -14,7 +22,8 @@ export default function App({ Component, pageProps }) {
      
         {/* You can include any other global tags here */}
       </Head>
-      <Component {...pageProps} />
+      <Banner ref={bannerRef}/>
+      <Component {...pageProps} bannerHeight={bannerHeight}/>
     </>
   )
 }
