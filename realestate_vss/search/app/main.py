@@ -1,4 +1,4 @@
-from typing import Dict, List, Union, Tuple, Any
+from typing import Dict, List, Union, Tuple, Any, Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
@@ -192,7 +192,7 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
   return FileResponse(image_path)
 
 @app.post("/search-by-text/")
-async def search_by_text(query: Dict[str, Union[str, int, List[int]]], 
+async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[List[Optional[int]]]]], 
                          mode: SearchMode = Query(SearchMode.VSS_ONLY), 
                          lambda_val: float = Query(0.8, description="Required if mode is SOFT_MATCH_AND_VSS."), 
                          alpha_val: float = Query(0.5, description="Required if mode is SOFT_MATCH_AND_VSS.")

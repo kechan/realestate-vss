@@ -20,6 +20,11 @@ export default function Home({ bannerHeight}) {
     // Clear the searchTerm when a file is selected for upload
     if (searchTerm) setSearchTerm('');
     setSelectedFileUrl(file ? URL.createObjectURL(file) : null);
+
+    // Clear the criteria search
+    if (!isFormDataEmpty(criteriaSearchFormData)) {
+      setCriteriaSearchFormData({});
+    }
   }
 
   const handleSearchTermChange = (newSearchTerm) => {
@@ -36,6 +41,17 @@ export default function Home({ bannerHeight}) {
     event.preventDefault();
     // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
     handleSubmit(event);
+  };
+
+  const handleCriteriaFormChange = () => {
+    if (selectedFile) {
+      setSelectedFile(null);
+      setSelectedFileUrl(null);
+    }
+    // its ok to include search term since this is both VSS + criteria search
+    // if (searchTerm) {
+    //   setSearchTerm('');
+    // }
   };
 
   const isFormDataEmpty = (formData) => {
@@ -160,6 +176,7 @@ export default function Home({ bannerHeight}) {
 
         <CriteriaSearchForm
             setSearchCriteria={setCriteriaSearchFormData}
+            onFormChange={handleCriteriaFormChange}
           />
       </div>
 

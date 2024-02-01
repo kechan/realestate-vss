@@ -3,7 +3,7 @@ import { Button, Input, TextField, Select, MenuItem, FormControl, InputLabel, Gr
 import CloseIcon from '@material-ui/icons/Close';
 import styles from '../styles/CriteriaSearchForm.module.css';
 
-function CriteriaSearchForm({setSearchCriteria}) {
+function CriteriaSearchForm({setSearchCriteria, onFormChange}) {
   const [province, setProvince] = useState('');
   const [city, setCity] = useState('');
   const [bedsInt, setBedsInt] = useState(null);
@@ -23,6 +23,7 @@ function CriteriaSearchForm({setSearchCriteria}) {
       price: [minPrice, maxPrice],
     };
     setSearchCriteria(payload);
+    onFormChange();    // Notify the parent component about the change
   }, [province, city, bedsInt, bathsInt, minPrice, maxPrice]);
   
   // Update state only if value is a non-negative integer
@@ -100,6 +101,7 @@ function CriteriaSearchForm({setSearchCriteria}) {
     if (maxPrice < minPrice) {
       setMaxPrice(minPrice);
       setSnackbarOpen(true);
+      onFormChange();    // Notify the parent component about the change
     }
   };
 
