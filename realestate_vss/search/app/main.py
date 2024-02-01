@@ -199,7 +199,8 @@ async def search_by_text(query: Dict[str, Union[str, int, List[int]]],
 ):
   
   phrase = query.get('phrase', None)
-  del query['phrase']   # remove key phrase from query after extracting it
+  if phrase is not None:
+    del query['phrase']   # remove key phrase from query after extracting it
 
   provState = query.get('provState', None)
   

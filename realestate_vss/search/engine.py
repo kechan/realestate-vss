@@ -225,7 +225,7 @@ class ListingSearchEngine:
       if key not in listings_df.columns or key == 'phrase':
         continue
 
-      if isinstance(value, tuple) and len(value) == 2:
+      if (isinstance(value, tuple) or isinstance(value, list)) and len(value) == 2:
         # For range conditions, use between
         condition_met = listings_df[key].between(value[0], value[1])
       else:

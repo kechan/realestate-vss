@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button, Input, TextField, Select, MenuItem, FormControl, InputLabel, Grid, Container, Snackbar, IconButton} from '@material-ui/core';
 import CloseIcon from '@material-ui/icons/Close';
 import styles from '../styles/CriteriaSearchForm.module.css';
 
-function CriteriaSearchForm() {
+function CriteriaSearchForm({setSearchCriteria}) {
   const [province, setProvince] = useState('');
   const [city, setCity] = useState('');
   const [bedsInt, setBedsInt] = useState(null);
@@ -12,13 +12,40 @@ function CriteriaSearchForm() {
   const [maxPrice, setMaxPrice] = useState(null);
 
   const [snackbarOpen, setSnackbarOpen] = useState(false);
+
+  // Update the searchCriteria in the parent component whenever the form fields change
+  useEffect(() => {
+    const payload = {
+      provState: province,
+      city: city,
+      bedsInt: bedsInt,
+      bathsInt: bathsInt,
+      price: [minPrice, maxPrice],
+    };
+    setSearchCriteria(payload);
+  }, [province, city, bedsInt, bathsInt, minPrice, maxPrice]);
   
   // Update state only if value is a non-negative integer
   const handleIntChange = (value, setter) => {
-    const intValue = Math.floor(Number(value));
-    if (intValue >= 0 && !isNaN(intValue)) {
-      setter(intValue);
-      console.log(`New value:', ${intValue}`);
+  
+    // If value is not just '0', remove leading zeros
+    if (value !== '0') {
+      value = value.replace(/^0+/, '');
+    }
+    
+    if (value !== '') {
+      const intValue = Math.floor(Number(value));
+      if (intValue >= 0 && !isNaN(intValue)) {
+        console.log('new int value:', intValue);
+        setter(intValue);
+      }
+      else {
+        console.log('new int value:', null);
+        setter(null);
+      }
+    } else {
+      setter(null);
+      console.log('new int value:', null);
     }
   };
 
@@ -32,19 +59,40 @@ function CriteriaSearchForm() {
 
 
   const handleMinPriceChange = (value) => {
-    const floatValue = parseFloat(value);
-    if (floatValue >= 0 && !isNaN(floatValue)) {
-      setMinPrice(floatValue);
-      if (floatValue > maxPrice) {
-        setMaxPrice(floatValue);    // max price must be equal or greater than min price
+    // console.log('min price:', value)
+    if (value === '') {
+      setMinPrice(null);
+      // console.log('new min price:', null)
+    }
+    else {
+      const floatValue = parseFloat(value);
+      // console.log('after parseFloat:', floatValue)
+      if (floatValue >= 0 && !isNaN(floatValue)) {
+        setMinPrice(floatValue);
+        // console.log('new min price:', floatValue)
+        if (floatValue > maxPrice) {
+          setMaxPrice(floatValue);    // max price must be equal or greater than min price
+        }
       }
     }
   };
 
+  // const handleMaxPriceChange = (value) => {
+  //   const floatValue = parseFloat(value);
+  //   if (!isNaN(floatValue)) {
+  //     setMaxPrice(floatValue);
+  //   }
+  // };
+
   const handleMaxPriceChange = (value) => {
-    const floatValue = parseFloat(value);
-    if (!isNaN(floatValue)) {
-      setMaxPrice(floatValue);
+    if (value === '') {
+      setMaxPrice(null);
+    }
+    else {
+      const floatValue = parseFloat(value);
+      if (!isNaN(floatValue) && floatValue >= 0) {
+        setMaxPrice(floatValue);
+      }
     }
   };
 
@@ -55,17 +103,17 @@ function CriteriaSearchForm() {
     }
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    const payload = {
-      provState: province,
-      city: city,
-      bedsInt: bedsInt,
-      bathsInt: bathsInt,
-      price: [minPrice, maxPrice],
-    };
-    // Call API with payload
-  };
+  // const handleSubmit = (e) => {
+  //   e.preventDefault();
+  //   const payload = {
+  //     provState: province,
+  //     city: city,
+  //     bedsInt: bedsInt,
+  //     bathsInt: bathsInt,
+  //     price: [minPrice, maxPrice],
+  //   };
+  //   setSearchCriteria(payload);  // Update the state in the parent component
+  // };
 
   const handleSnackbarClose = (event, reason) => {
     if (reason === 'clickaway') {
@@ -77,7 +125,8 @@ function CriteriaSearchForm() {
 
   return (
     <Container maxWidth="md" className={styles.formContainer}>
-      <form onSubmit={handleSubmit}>    
+      {/* <form onSubmit={handleSubmit}>     */}
+      <form>    
         <Grid container spacing={3}>
           <Grid item xs={12}>
             {/* <FormControl variant="outlined" fullWidth className={`${styles.formControl} ${styles.noIndicator} ${styles.noNotch} ${styles.noBorder}`}> */}
@@ -101,47 +150,51 @@ function CriteriaSearchForm() {
           <Grid item xs={12}>
             <FormControl fullWidth>
                 <InputLabel htmlFor="city">City</InputLabel>
-                <Input id="city" type="number" value={city} onChange={e => setCity(e.target.value)} />
+                <Input id="city" type="text" value={city} onChange={e => setCity(e.target.value)} />
               </FormControl>   
           </Grid>
           <Grid item xs={6}>
               <FormControl fullWidth>
                 <InputLabel htmlFor="bedsInt">Beds</InputLabel>
-                <Input id="bedsInt" type="number" value={bedsInt} onChange={e => handleIntChange(e.target.value, setBedsInt)} 
-                inputProps= {{min: 0}}
+                <Input id="bedsInt" type="text" 
+                  value={bedsInt === null ? '' : bedsInt}
+                  onChange={e => handleIntChange(e.target.value, setBedsInt)} 
+                  inputProps= {{pattern: "[0-9]*"}}
                 />
               </FormControl>
             </Grid>
             <Grid item xs={6}>
               <FormControl fullWidth>
                 <InputLabel htmlFor="bathsInt">Baths</InputLabel>
-                <Input id="bathsInt" type="number" value={bathsInt} onChange={e => handleIntChange(e.target.value, setBathsInt)} 
-                inputProps= {{min: 0}}
+                <Input id="bathsInt" type="text" 
+                value={bathsInt === null ? '' : bathsInt} 
+                onChange={e => handleIntChange(e.target.value, setBathsInt)} 
+                inputProps= {{pattern: "[0-9]*"}}
                 />
               </FormControl>
             </Grid>
           <Grid item xs={6}>          
             <FormControl fullWidth>
                 <InputLabel htmlFor="minPrice">Min Price</InputLabel>
-                <Input id="minPrice" type="number" value={minPrice} onChange={e => handleMinPriceChange(e.target.value)} 
-                inputProps={{ min: 0 }}
+                <Input id="minPrice" type="text" 
+                value={minPrice === null ? '' : minPrice} 
+                onChange={e => handleMinPriceChange(e.target.value)} 
+                inputProps={{pattern: "[0-9]*"}}
                 />
             </FormControl>
           </Grid>
           <Grid item xs={6}>          
               <FormControl fullWidth>
                 <InputLabel htmlFor="maxPrice" shrink={maxPrice !== null}>Max Price</InputLabel>
-                <Input id="maxPrice" type="number" 
-                  value={maxPrice} 
+                <Input id="maxPrice" type="text" 
+                  value={maxPrice === null ? '' : maxPrice} 
                   onChange={e => handleMaxPriceChange(e.target.value)} 
                   onBlur={validateMaxPrice}
-                  inputProps={{ min: 0 }}
+                  inputProps={{pattern: "[0-9]*"}}
                 />
             </FormControl>
           </Grid>
-          <Grid item xs={12}>
-            {/* <Button type="submit" variant="contained" color="primary" fullWidth>Search</Button> */}
-          </Grid>
+
         </Grid>
         
       </form>

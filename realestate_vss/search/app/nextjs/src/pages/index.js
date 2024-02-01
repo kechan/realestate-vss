@@ -13,6 +13,8 @@ export default function Home({ bannerHeight}) {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
+  const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
+
   const handleFileChange = (file) => {
     setSelectedFile(file);
     // Clear the searchTerm when a file is selected for upload
@@ -36,17 +38,37 @@ export default function Home({ bannerHeight}) {
     handleSubmit(event);
   };
 
+  const isFormDataEmpty = (formData) => {
+    if (formData === null) {
+      return true;
+    }
+  
+    for (let key in formData) {
+      if (Array.isArray(formData[key])) {
+        if (formData[key].some(value => value !== null)) {
+          return false;
+        }
+      } else if (formData[key] !== null && formData[key] !== "") {
+        return false;
+      }
+    }
+    return true;
+  };
+
   // Function to handle form submission for file upload
   const handleSubmit = async (event) => {
     event.preventDefault();
     // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
-    if (!selectedFile && !searchTerm) {
-      alert('Please select a file or enter a search term.');
+
+    if (!selectedFile && !searchTerm && isFormDataEmpty(criteriaSearchFormData)) {
+      alert('Please select a file, enter a search term, or fill out the criteria search form.');
       return;
     }
 
+    console.log('Search submitted:', criteriaSearchFormData);
+
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
-    console.log('apiURL:', apiURL);
+    // console.log('apiURL:', apiURL);
 
     if (selectedFile) {
       const formData = new FormData();
@@ -90,6 +112,32 @@ export default function Home({ bannerHeight}) {
         console.error('Error:', error);
       }
     }
+
+    if (!isFormDataEmpty(criteriaSearchFormData)) {
+      if (criteriaSearchFormData.provState == "") {
+        alert('Please select a province.');
+        return;
+      }
+
+      try {
+        criteriaSearchFormData.phrase = searchTerm;
+        const response = await fetch(`${apiURL}/search-by-text/?mode=SOFT_MATCH_AND_VSS&lambda_val=0.8&alpha_val=0.5`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(criteriaSearchFormData)
+        });
+        const data = await response.json();
+
+        data.searchType = 'text'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+
+      } catch (error) {
+        console.error('Error:', error);
+      }
+
+    }
   };
 
   // Determine the class for the search-container based on presence or absence of search results
@@ -109,8 +157,10 @@ export default function Home({ bannerHeight}) {
           />
           <button className="search-btn" onClick={handleSubmit}>Search</button>
         </div>      
-        {/* <CriteriaSearchForm onCriteriaSearchSubmit={handleCriteriaSearchSubmit} /> */}
-        <CriteriaSearchForm />
+
+        <CriteriaSearchForm
+            setSearchCriteria={setCriteriaSearchFormData}
+          />
       </div>
 
     {/* Display search results */}
