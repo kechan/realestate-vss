@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import TextSearch from './TextSearch';
 import FileUpload from './FileUpload';
+import CriteriaSearchForm from './CriteriaSearchForm';
+
 import ImageSearchResults from './ImageSearchResults'; 
 import TextSearchResults from './TextSearchResults';
 
@@ -107,6 +109,8 @@ export default function Home({ bannerHeight}) {
           />
           <button className="search-btn" onClick={handleSubmit}>Search</button>
         </div>      
+        {/* <CriteriaSearchForm onCriteriaSearchSubmit={handleCriteriaSearchSubmit} /> */}
+        <CriteriaSearchForm />
       </div>
 
     {/* Display search results */}

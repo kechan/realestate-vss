@@ -11,10 +11,10 @@ from PIL import Image, ImageDraw, ImageFont
 from realestate_core.common.utils import save_to_pickle, load_from_pickle, load_from_pickle, join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 
-class SearchMode(Enum):
-  VSS_RERANK_ONLY = 1
-  VSS_ONLY = 2
-  SOFT_MATCH_AND_VSS = 3
+class SearchMode(str, Enum):
+  VSS_RERANK_ONLY = "VSS_RERANK_ONLY"
+  VSS_ONLY = "VSS_ONLY"
+  SOFT_MATCH_AND_VSS = "SOFT_MATCH_AND_VSS"
 
 class ListingSearchEngine:
   def __init__(self, image_embeddings_df, text_embeddings_df, image_embedder, text_embedder):

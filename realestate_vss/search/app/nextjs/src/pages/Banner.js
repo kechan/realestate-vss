@@ -8,7 +8,7 @@ const Banner = React.forwardRef((props, ref) => {
         {/* SVG content can be placed here */}
         <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="2" fill="white" />
       </svg>
-      <h1 className={styles.appName}>Listing Image or Semantic Search</h1>
+      <h1 className={styles.appName}>Listing Image or Remarks Search</h1>
     </div>
   );
 });

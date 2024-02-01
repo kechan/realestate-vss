@@ -1,5 +1,5 @@
 from typing import Dict, List, Union, Tuple, Any
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from realestate_vss.models.embedding import OpenClipTextEmbeddingModel, OpenClipImageEmbeddingModel
@@ -192,11 +192,14 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
   return FileResponse(image_path)
 
 @app.post("/search-by-text/")
-async def search_by_text(query: Dict):
+async def search_by_text(query: Dict[str, Union[str, int, List[int]]], 
+                         mode: SearchMode = Query(SearchMode.VSS_ONLY), 
+                         lambda_val: float = Query(0.8, description="Required if mode is SOFT_MATCH_AND_VSS."), 
+                         alpha_val: float = Query(0.5, description="Required if mode is SOFT_MATCH_AND_VSS.")
+):
   
   phrase = query.get('phrase', None)
-  # remove key phrase from query
-  del query['phrase']
+  del query['phrase']   # remove key phrase from query after extracting it
 
   provState = query.get('provState', None)
   
@@ -204,10 +207,15 @@ async def search_by_text(query: Dict):
   if provState is None:
     raise HTTPException(status_code=404, detail="provState must be provided")
 
-  # TODO: doing VSS_ONLY for now, but need to account for other search modes
-  # results = search_engine.text_search(SearchMode.SOFT_MATCH_AND_VSS, topk=10, return_df=False, lambda_val=0.8, alpha_val=0.5, phrase=phrase, **query)
-  results = search_engine.text_search(SearchMode.VSS_ONLY, topk=10, phrase=phrase, return_df=False, **query)
+  if mode == SearchMode.VSS_ONLY or mode == SearchMode.VSS_RERANK_ONLY:
+    results = search_engine.text_search(mode, topk=20, phrase=phrase, return_df=False, **query)
+  elif mode == SearchMode.SOFT_MATCH_AND_VSS:
+    results = search_engine.text_search(mode, topk=20, return_df=False, lambda_val=lambda_val, alpha_val=alpha_val, phrase=phrase, **query)
+  else:
+    raise HTTPException(status_code=404, detail="Invalid search mode")
+  
   return results
+
 
 # for testing before UI is built
 @app.post("/search-by-image-html/", response_class=HTMLResponse)

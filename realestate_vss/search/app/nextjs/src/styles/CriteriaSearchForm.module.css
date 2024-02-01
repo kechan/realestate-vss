@@ -1,0 +1,40 @@
+/* CriteriaSearchForm.module.css */
+/* CriteriaSearchForm.module.css */
+.formContainer {
+  padding-top: 20px; /* Adjust the value to the desired padding */
+}
+
+
+.formControl {
+  margin-top: 20px; /* Adds spacing between the search box and the form */
+  margin-bottom: 20px; /* Adds spacing below the form */
+}
+
+.selectEmpty {
+  margin-top: 10px;
+  max-width: 250px; 
+  background-color: white; /* Makes the dropdown visible */
+  border: 2px solid #ccc; /* Adds a border to the dropdown */
+
+  height: 40px; /* Adjust the height as needed */
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.noIndicator .MuiSelect-icon {
+  display: none;
+}
+
+.noNotch .MuiOutlinedInput-notchedOutline, 
+.noNotch .MuiOutlinedInput-notchedOutline {
+  display: none;
+}
+
+.noBorder .MuiOutlinedInput-notchedOutline {
+  border-color: transparent !important; /* Instead of setting border to none, make it transparent */
+  visibility: hidden; /* Hide the fieldset */
+}
+
+.formControl fieldset {
+  display: none !important; /* This will hide the fieldset entirely */
+}
