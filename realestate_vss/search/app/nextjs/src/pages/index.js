@@ -15,6 +15,8 @@ export default function Home({ bannerHeight}) {
 
   const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
 
+  const [textSearchMode, setTextSearchMode] = useState('VSS_ONLY');
+
   const handleFileChange = (file) => {
     setSelectedFile(file);
     // Clear the searchTerm when a file is selected for upload
@@ -73,6 +75,7 @@ export default function Home({ bannerHeight}) {
 
   // Function to handle form submission for file upload
   const handleSubmit = async (event) => {
+    console.log('search mode:', textSearchMode);
     event.preventDefault();
     // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
 
@@ -80,13 +83,12 @@ export default function Home({ bannerHeight}) {
       alert('Please select a file, enter a search term, or fill out the criteria search form.');
       return;
     }
-
     console.log('Search submitted:', criteriaSearchFormData);
 
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
     // console.log('apiURL:', apiURL);
 
-    if (selectedFile) {
+    if (selectedFile) {   // perform image search
       const formData = new FormData();
       formData.append('file', selectedFile);
 
@@ -102,34 +104,43 @@ export default function Home({ bannerHeight}) {
       } catch (error) {
         console.error('Error:', error);
       }
+      return
     }
 
-    if (searchTerm) {
-      // implement search by text
-      const input_payload = {
-        provState: "ON",    // TODO: hard-coded for now, need to change later
-        phrase: searchTerm
+    if (textSearchMode === 'VSS_ONLY') {
+
+      if (searchTerm) {
+        if (criteriaSearchFormData.provState == "") {
+          alert('Please select a province.');
+          return;
+        }
+        const input_payload = {
+          provState: criteriaSearchFormData.provState,    // TODO: hard-coded for now, need to change later
+          phrase: searchTerm
+        }
+
+        try {
+          const response = await fetch(`${apiURL}/search-by-text/`, {   // VSS_ONLY by default
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(input_payload)
+          });
+          const data = await response.json();
+
+          // console.log('data:', data);
+          data.searchType = 'text'; // Add a property to the data object to indicate the search type
+          setSearchResults(data); // Update the state with the search results
+        } catch (error) {
+          console.error('Error:', error);
+        }
       }
 
-      try {
-        const response = await fetch(`${apiURL}/search-by-text/`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(input_payload)
-        });
-        const data = await response.json();
-
-        // console.log('data:', data);
-        data.searchType = 'text'; // Add a property to the data object to indicate the search type
-        setSearchResults(data); // Update the state with the search results
-      } catch (error) {
-        console.error('Error:', error);
-      }
+      return;
     }
 
-    if (!isFormDataEmpty(criteriaSearchFormData)) {
+    if (textSearchMode === 'SOFT_MATCH_AND_VSS' && searchTerm) {
       if (criteriaSearchFormData.provState == "") {
         alert('Please select a province.');
         return;
@@ -152,7 +163,7 @@ export default function Home({ bannerHeight}) {
       } catch (error) {
         console.error('Error:', error);
       }
-
+      return
     }
   };
 
@@ -172,6 +183,14 @@ export default function Home({ bannerHeight}) {
             onSearchSubmit={handleTextSearchSubmit}
           />
           <button className="search-btn" onClick={handleSubmit}>Search</button>
+ 
+          <div className="text-search-model-select-container">
+            <label for="text-search-mode-select">Mode:</label>
+            <select className="text-search-mode-select" value={textSearchMode} onChange={e => setTextSearchMode(e.target.value)}>
+              <option value="VSS_ONLY">VSS_ONLY</option>
+              <option value="SOFT_MATCH_AND_VSS">SOFT_MATCH_AND_VSS</option>
+            </select>
+          </div>
         </div>      
 
         <CriteriaSearchForm
@@ -202,7 +221,7 @@ export default function Home({ bannerHeight}) {
         box-shadow: 0px 4px 6px rgba(32, 33, 36, 0.28);
         padding: 20px;
         margin: 20px auto;
-        max-width: 600px; /* Adjust width as needed */
+        max-width: 800px; /* Adjust width as needed */
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -213,7 +232,7 @@ export default function Home({ bannerHeight}) {
         box-shadow: 0px 4px 6px rgba(32, 33, 36, 0.28);
         padding: 15px;
         margin: 10px auto;
-        max-width: 600px; /* Adjust width as needed */
+        max-width: 800px; /* Adjust width as needed */
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -240,7 +259,28 @@ export default function Home({ bannerHeight}) {
         align-items: center;
         gap: 10px;
         margin-top: 20px; /* Adjust as needed for spacing */
-        width: 80%;
+        width: 90%;
+      }
+
+      .text-search-model-select-container {
+        display: flex;
+        flex-direction: column;
+        // align-items: center;
+        gap: 5px;
+      }
+
+      .text-search-model-select-container label {
+        font-size: 14px;
+        color: #000000;
+      }
+
+      .text-search-mode-select {
+        padding: 5px 5px;
+        font-size: 10px;
+        border-radius: 5px;
+        border: 1px solid #D2232A;
+        background-color: #D2232A;
+        appearance: none;
       }
     `}</style>
 
