@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Input, TextField, Select, MenuItem, FormControl, InputLabel, Grid, Container, Snackbar, IconButton} from '@material-ui/core';
+import { Button, Input, TextField, Select, MenuItem, FormControl, InputLabel, Grid, Container, Snackbar, SnackbarContent, IconButton} from '@material-ui/core';
 import CloseIcon from '@material-ui/icons/Close';
 import styles from '../styles/CriteriaSearchForm.module.css';
 
@@ -203,15 +203,21 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange}) {
 
       <Snackbar
         open={snackbarOpen}
-        autoHideDuration={6000}
+        autoHideDuration={3000}
         onClose={handleSnackbarClose}
-        message="Max price cannot be less than min price"
+        message="Max price cannot be less than min price"        
         action={
           <IconButton size="small" aria-label="close" color="inherit" onClick={handleSnackbarClose}>
             <CloseIcon fontSize="small" />
           </IconButton>
         }
-      />
+      >
+        <SnackbarContent style={{
+          backgroundColor: '#D2232A',
+        }}
+        message={<span id="client-snackbar">Max price cannot be less than min price</span>}
+        />
+      </Snackbar>
     </Container>
   );
 }
