@@ -105,6 +105,15 @@ async def startup_event():
         text_embedder=text_embedder
         )
 
+@app.get("/listing/{listingId}")
+async def get_listing(listingId: str) -> Dict[str, Any]:
+  listing_data = search_engine.get_listing(listingId)
+
+  if not listing_data:
+      raise HTTPException(status_code=404, detail="Listing not found")
+
+  return listing_data
+
 @app.post("/search-by-image/")
 async def search_by_image(file: UploadFile = File(...)) ->List[Dict[str, Union[str, float , List[str]]]]:
     """

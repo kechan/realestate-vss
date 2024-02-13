@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 import searchStyles from '../styles/SearchResults.module.css';
 import imageSearchstyles from '../styles/ImageSearchResults.module.css';
 
@@ -12,7 +13,12 @@ export default function ImageSearchResults({ searchResults }) {
       </div>
       {searchResults.map(listing => (
         <div key={listing.listingId} className={searchStyles.listing}>
-          <div className={searchStyles['listing-id']}>{listing.listingId}</div>
+          <div className={searchStyles['listing-id']}>
+            {/* {listing.listingId} */}
+            <Link href={`/listing/${listing.listingId}`} passHref>
+              <span className={searchStyles['listing-link']}>{listing.listingId}</span>
+            </Link>
+          </div>
           <div className={searchStyles['listing-score']}>
             {listing.avg_score ? parseFloat(listing.avg_score).toFixed(2) : 'N/A'}
           </div>

@@ -36,3 +36,9 @@
   width: 100px;
   padding-right: 20px;
 }
+
+.listing-link {
+  color: #D2232A; /* Your theme's red accent color */
+  text-decoration: underline;
+  cursor: pointer;
+}

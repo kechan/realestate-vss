@@ -48,6 +48,21 @@ class ListingSearchEngine:
       text_embeddings = np.stack(df.embedding.values)
       self.faiss_text_index[provState] = self._build_faiss_index(text_embeddings)
 
+  def get_listing(self, listingId: str) -> Dict[str, Any]:
+    listing = self.text_embeddings_df.q("jumpId == @listingId")
+    if len(listing) == 0:   # search the image set
+      listing = self.image_embeddings_df.q("listing_id == @listingId")
+      if len(listing) == 0:
+        return {}
+    
+    listing_data = listing.to_dict('records')[0]
+
+    listing_data.pop('embedding') 
+
+    if 'propertyFeatures' in listing_data:
+      listing_data['propertyFeatures'] = listing_data['propertyFeatures'].tolist()
+
+    return listing_data
 
   def text_search(self, mode: SearchMode, topk=50, return_df=True, lambda_val=None, alpha_val=None, **query) -> Union[pd.DataFrame, List[Dict]]:    
     '''

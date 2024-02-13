@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 import { useTable } from 'react-table';
 import styles from '../styles/TextSearchResults.module.css';
 
@@ -8,6 +9,11 @@ export default function TextSearchResults({ searchResults }) {
       {
         Header: 'Listing',
         accessor: 'listing_id', // Ensure the accessor matches the corresponding key in your data
+        Cell: ({ value }) => (
+          <Link href={`/listing/${value}`} className={styles['listing-link']}>
+            {value}
+          </Link>
+        ),
       },
       {
         Header: 'Score',

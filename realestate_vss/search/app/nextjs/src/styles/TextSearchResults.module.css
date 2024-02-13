@@ -59,3 +59,8 @@
   flex-grow: 3; /* Make the header column wider than the listing column */
   padding: 10px;
 }
+
+.listing-link {
+  color: #D2232A;
+  text-decoration: underline;
+}
