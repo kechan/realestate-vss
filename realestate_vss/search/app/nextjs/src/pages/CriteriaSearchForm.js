@@ -3,7 +3,7 @@ import { Button, Input, TextField, Select, MenuItem, FormControl, InputLabel, Gr
 import CloseIcon from '@material-ui/icons/Close';
 import styles from '../styles/CriteriaSearchForm.module.css';
 
-function CriteriaSearchForm({setSearchCriteria, onFormChange}) {
+function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
   const [province, setProvince] = useState('');
   const [city, setCity] = useState('');
   const [bedsInt, setBedsInt] = useState(null);
@@ -105,18 +105,6 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange}) {
     }
   };
 
-  // const handleSubmit = (e) => {
-  //   e.preventDefault();
-  //   const payload = {
-  //     provState: province,
-  //     city: city,
-  //     bedsInt: bedsInt,
-  //     bathsInt: bathsInt,
-  //     price: [minPrice, maxPrice],
-  //   };
-  //   setSearchCriteria(payload);  // Update the state in the parent component
-  // };
-
   const handleSnackbarClose = (event, reason) => {
     if (reason === 'clickaway') {
       return;
@@ -149,56 +137,58 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange}) {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12}>
-            <FormControl fullWidth>
-                <InputLabel htmlFor="city">City</InputLabel>
-                <Input id="city" type="text" value={city} onChange={e => setCity(e.target.value)} />
-              </FormControl>   
-          </Grid>
-          <Grid item xs={6}>
-              <FormControl fullWidth>
-                <InputLabel htmlFor="bedsInt">Beds</InputLabel>
-                <Input id="bedsInt" type="text" 
-                  value={bedsInt === null ? '' : bedsInt}
-                  onChange={e => handleIntChange(e.target.value, setBedsInt)} 
-                  inputProps= {{pattern: "[0-9]*"}}
-                />
-              </FormControl>
-            </Grid>
-            <Grid item xs={6}>
-              <FormControl fullWidth>
-                <InputLabel htmlFor="bathsInt">Baths</InputLabel>
-                <Input id="bathsInt" type="text" 
-                value={bathsInt === null ? '' : bathsInt} 
-                onChange={e => handleIntChange(e.target.value, setBathsInt)} 
-                inputProps= {{pattern: "[0-9]*"}}
-                />
-              </FormControl>
-            </Grid>
-          <Grid item xs={6}>          
-            <FormControl fullWidth>
-                <InputLabel htmlFor="minPrice">Min Price</InputLabel>
-                <Input id="minPrice" type="text" 
-                value={minPrice === null ? '' : minPrice} 
-                onChange={e => handleMinPriceChange(e.target.value)} 
-                inputProps={{pattern: "[0-9]*"}}
-                />
-            </FormControl>
-          </Grid>
-          <Grid item xs={6}>          
-              <FormControl fullWidth>
-                <InputLabel htmlFor="maxPrice" shrink={maxPrice !== null}>Max Price</InputLabel>
-                <Input id="maxPrice" type="text" 
-                  value={maxPrice === null ? '' : maxPrice} 
-                  onChange={e => handleMaxPriceChange(e.target.value)} 
-                  onBlur={validateMaxPrice}
-                  inputProps={{pattern: "[0-9]*"}}
-                />
-            </FormControl>
-          </Grid>
-
-        </Grid>
-        
+          {searchMode !== 'VSS_ONLY' && (
+            <>
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                    <InputLabel htmlFor="city">City</InputLabel>
+                    <Input id="city" type="text" value={city} onChange={e => setCity(e.target.value)} />
+                  </FormControl>   
+              </Grid>
+              <Grid item xs={6}>
+                  <FormControl fullWidth>
+                    <InputLabel htmlFor="bedsInt">Beds</InputLabel>
+                    <Input id="bedsInt" type="text" 
+                      value={bedsInt === null ? '' : bedsInt}
+                      onChange={e => handleIntChange(e.target.value, setBedsInt)} 
+                      inputProps= {{pattern: "[0-9]*"}}
+                    />
+                  </FormControl>
+                </Grid>
+                <Grid item xs={6}>
+                  <FormControl fullWidth>
+                    <InputLabel htmlFor="bathsInt">Baths</InputLabel>
+                    <Input id="bathsInt" type="text" 
+                    value={bathsInt === null ? '' : bathsInt} 
+                    onChange={e => handleIntChange(e.target.value, setBathsInt)} 
+                    inputProps= {{pattern: "[0-9]*"}}
+                    />
+                  </FormControl>
+                </Grid>
+              <Grid item xs={6}>          
+                <FormControl fullWidth>
+                    <InputLabel htmlFor="minPrice">Min Price</InputLabel>
+                    <Input id="minPrice" type="text" 
+                    value={minPrice === null ? '' : minPrice} 
+                    onChange={e => handleMinPriceChange(e.target.value)} 
+                    inputProps={{pattern: "[0-9]*"}}
+                    />
+                </FormControl>
+              </Grid>
+              <Grid item xs={6}>          
+                  <FormControl fullWidth>
+                    <InputLabel htmlFor="maxPrice" shrink={maxPrice !== null}>Max Price</InputLabel>
+                    <Input id="maxPrice" type="text" 
+                      value={maxPrice === null ? '' : maxPrice} 
+                      onChange={e => handleMaxPriceChange(e.target.value)} 
+                      onBlur={validateMaxPrice}
+                      inputProps={{pattern: "[0-9]*"}}
+                    />
+                </FormControl>
+              </Grid>
+            </>
+          )}
+        </Grid>        
       </form>
 
       <Snackbar

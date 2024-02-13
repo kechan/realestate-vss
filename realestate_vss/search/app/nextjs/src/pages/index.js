@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
+import Tooltip from '@material-ui/core/Tooltip';
+
 import TextSearch from './TextSearch';
 import FileUpload from './FileUpload';
 import CriteriaSearchForm from './CriteriaSearchForm';
 
 import ImageSearchResults from './ImageSearchResults'; 
 import TextSearchResults from './TextSearchResults';
+
 
 export default function Home({ bannerHeight}) {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -73,7 +76,7 @@ export default function Home({ bannerHeight}) {
     return true;
   };
 
-  // Function to handle form submission for file upload
+  // Function to handle calling search API 
   const handleSubmit = async (event) => {
     console.log('search mode:', textSearchMode);
     event.preventDefault();
@@ -183,19 +186,31 @@ export default function Home({ bannerHeight}) {
             onSearchSubmit={handleTextSearchSubmit}
           />
           <button className="search-btn" onClick={handleSubmit}>Search</button>
- 
+        
           <div className="text-search-model-select-container">
-            <label for="text-search-mode-select">Mode:</label>
-            <select className="text-search-mode-select" value={textSearchMode} onChange={e => setTextSearchMode(e.target.value)}>
-              <option value="VSS_ONLY">VSS_ONLY</option>
-              <option value="SOFT_MATCH_AND_VSS">SOFT_MATCH_AND_VSS</option>
-            </select>
+            <Tooltip title="Choose a search mode: 'VSS ONLY' for only Vector Similarity Search, 'Soft Match + VSS' for a mix of criteria matching and VSS." placement="top">
+              <div>
+
+                {/* <label for="text-search-mode-select">Mode:</label> */}
+                <select className="text-search-mode-select" 
+                        style={{ color: '#FFFFFF' }} 
+                        value={textSearchMode} 
+                        onChange={e => setTextSearchMode(e.target.value)}
+                >
+                  <option value="VSS_ONLY">🔍 VSS ONLY </option>
+                  <option value="SOFT_MATCH_AND_VSS">🔍📃 Soft Match + VSS</option>
+                </select>
+
+              </div>
+            </Tooltip>
           </div>
+          
         </div>      
 
         <CriteriaSearchForm
             setSearchCriteria={setCriteriaSearchFormData}
             onFormChange={handleCriteriaFormChange}
+            searchMode={textSearchMode}
           />
       </div>
 

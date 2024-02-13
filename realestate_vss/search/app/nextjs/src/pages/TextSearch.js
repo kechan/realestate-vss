@@ -18,7 +18,7 @@ export default function TextSearch({ searchTerm, onSearchTermChange, onSearchSub
     <div className={styles['text-search-container']}>
       <input
         type="text"
-        placeholder="Enter search terms..."
+        placeholder="Describe your perfect home..."
         value={searchTerm}
         // Call onSearchTermChange every time the input changes, to update the searchTerm state in the 
         // parent component.
