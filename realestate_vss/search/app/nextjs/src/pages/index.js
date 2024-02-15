@@ -15,6 +15,34 @@ export default function Home({ bannerHeight}) {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [hasLoadedFromLocalStorage, setHasLoadedFromLocalStorage] = useState(false);
+  const [isFirstRender, setIsFirstRender] = useState(true);
+
+  // Load the search results from Local Storage when the component mounts
+  useEffect(() => {
+    if (!hasLoadedFromLocalStorage) {
+      const savedSearchResults = localStorage.getItem('searchResults');
+      // console.log('initial render savedSearchResults:', savedSearchResults);
+      // console.log('initial render savedSearchResults.searchType:', savedSearchResults.searchType);
+
+      if (savedSearchResults) {
+        const results = JSON.parse(savedSearchResults);
+        results.searchType = localStorage.getItem('searchType'); // Load the search type separately
+        setSearchResults(results);
+      }
+      setHasLoadedFromLocalStorage(true);
+    }
+  }, [hasLoadedFromLocalStorage]); // Runs this effect whenever hasLoadedFromLocalStorage changes
+
+  // Save the search results to Local Storage whenever they change
+  useEffect(() => {
+    if (!isFirstRender) {
+      localStorage.setItem('searchResults', JSON.stringify(searchResults));
+      localStorage.setItem('searchType', searchResults.searchType); // Save the search type separately
+    } else {
+      setIsFirstRender(false);
+    }
+  }, [searchResults]); // Runs this effect whenever searchResults changes
 
   const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
 
