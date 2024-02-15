@@ -78,32 +78,33 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
     }
   };
 
-  // const handleMaxPriceChange = (value) => {
-  //   const floatValue = parseFloat(value);
-  //   if (!isNaN(floatValue)) {
-  //     setMaxPrice(floatValue);
-  //   }
-  // };
 
-  const handleMaxPriceChange = (value) => {
-    if (value === '') {
-      setMaxPrice(null);
-    }
-    else {
-      const floatValue = parseFloat(value);
-      if (!isNaN(floatValue) && floatValue >= 0) {
-        setMaxPrice(floatValue);
-      }
-    }
+  const handleMaxPriceChange = (event) => {
+    const value = event.target.value;
+    // Allow the user to freely enter text, only sanitize when focus is lost (onBlur)
+    setMaxPrice(value);
   };
 
   const validateMaxPrice = () => {
-    if (maxPrice < minPrice) {
-      setMaxPrice(minPrice);
-      setSnackbarOpen(true);
-      onFormChange();    // Notify the parent component about the change
+    // Ensure maxPrice is a string before attempting to use string methods
+    let maxPriceStr = String(maxPrice);
+    let sanitizedValue = maxPriceStr.replace(/^0+/, '');
+    sanitizedValue = sanitizedValue ? parseFloat(sanitizedValue) : '';
+  
+    if (!isNaN(sanitizedValue) && sanitizedValue >= 0) {
+      if (sanitizedValue < minPrice) {
+        setSnackbarOpen(true);
+        sanitizedValue = minPrice; // Ensure maxPrice is not less than minPrice
+      }
+      // Convert sanitizedValue back to a string if you want to store it as a string in your state
+      setMaxPrice(String(sanitizedValue));
+    } else {
+      setMaxPrice(''); // Set back to empty string if not a valid number
     }
+  
+    onFormChange(); // Notify the parent component about the change
   };
+  
 
   const handleSnackbarClose = (event, reason) => {
     if (reason === 'clickaway') {
@@ -179,8 +180,8 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
                   <FormControl fullWidth>
                     <InputLabel htmlFor="maxPrice" shrink={maxPrice !== null}>Max Price</InputLabel>
                     <Input id="maxPrice" type="text" 
-                      value={maxPrice === null ? '' : maxPrice} 
-                      onChange={e => handleMaxPriceChange(e.target.value)} 
+                      value={maxPrice}
+                      onChange={handleMaxPriceChange}
                       onBlur={validateMaxPrice}
                       inputProps={{pattern: "[0-9]*"}}
                     />

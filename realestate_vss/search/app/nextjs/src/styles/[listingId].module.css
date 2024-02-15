@@ -1,5 +1,6 @@
 /* [listingId].module.css */
 .pageWrapper {
+  color: black;
   background-color: #eee;
   min-height: 100vh;
 }

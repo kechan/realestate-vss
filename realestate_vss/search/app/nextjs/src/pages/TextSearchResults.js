@@ -1,28 +1,9 @@
-import React, {useEffect, useState} from 'react';
+import React from 'react';
 import Link from 'next/link';
 import { useTable } from 'react-table';
 import styles from '../styles/TextSearchResults.module.css';
 
 export default function TextSearchResults({ searchResults }) {
-  // Initialize localSearchResults as an empty array
-  const [localSearchResults, setLocalSearchResults] = useState([]);
-
-  // Load search results from Local Storage after initial render
-  useEffect(() => {
-    const savedResults = localStorage.getItem('searchResults');
-    if (savedResults) {
-      // If there are search results in Local Storage, parse them and set them
-      setLocalSearchResults(JSON.parse(savedResults));
-    } else {
-      // If there are no search results in Local Storage, use the prop
-      setLocalSearchResults(searchResults);
-    }
-  }, []);
-
-  // Save search results to Local Storage whenever they change
-  useEffect(() => {
-    localStorage.setItem('searchResults', JSON.stringify(localSearchResults));
-  }, [localSearchResults]);
 
   const columns = React.useMemo(
     () => [

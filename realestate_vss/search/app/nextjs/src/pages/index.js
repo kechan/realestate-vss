@@ -15,32 +15,25 @@ export default function Home({ bannerHeight}) {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [hasLoadedFromLocalStorage, setHasLoadedFromLocalStorage] = useState(false);
-  const [isFirstRender, setIsFirstRender] = useState(true);
 
   // Load the search results from Local Storage when the component mounts
   useEffect(() => {
-    if (!hasLoadedFromLocalStorage) {
-      const savedSearchResults = localStorage.getItem('searchResults');
-      // console.log('initial render savedSearchResults:', savedSearchResults);
-      // console.log('initial render savedSearchResults.searchType:', savedSearchResults.searchType);
-
-      if (savedSearchResults) {
-        const results = JSON.parse(savedSearchResults);
-        results.searchType = localStorage.getItem('searchType'); // Load the search type separately
-        setSearchResults(results);
+    const savedSearchResults = localStorage.getItem('searchResults');
+    if (savedSearchResults) {
+      const results = JSON.parse(savedSearchResults);
+      const searchType = localStorage.getItem('searchType');
+      if (searchType) {
+        results.searchType = searchType;
       }
-      setHasLoadedFromLocalStorage(true);
+      setSearchResults(results);
     }
-  }, [hasLoadedFromLocalStorage]); // Runs this effect whenever hasLoadedFromLocalStorage changes
+  }, []); // Empty dependency array ensures this runs once on client-side mount
 
   // Save the search results to Local Storage whenever they change
   useEffect(() => {
-    if (!isFirstRender) {
+    if (searchResults.length > 0) {
       localStorage.setItem('searchResults', JSON.stringify(searchResults));
       localStorage.setItem('searchType', searchResults.searchType); // Save the search type separately
-    } else {
-      setIsFirstRender(false);
     }
   }, [searchResults]); // Runs this effect whenever searchResults changes
 
@@ -107,6 +100,7 @@ export default function Home({ bannerHeight}) {
   // Function to handle calling search API 
   const handleSubmit = async (event) => {
     console.log('search mode:', textSearchMode);
+    console.log('search term:', searchTerm); 
     event.preventDefault();
     // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
 
@@ -114,6 +108,7 @@ export default function Home({ bannerHeight}) {
       alert('Please select a file, enter a search term, or fill out the criteria search form.');
       return;
     }
+
     console.log('Search submitted:', criteriaSearchFormData);
 
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
@@ -167,11 +162,15 @@ export default function Home({ bannerHeight}) {
           console.error('Error:', error);
         }
       }
+      else {
+        alert('Please enter a search term.');
+      }
 
       return;
     }
 
-    if (textSearchMode === 'SOFT_MATCH_AND_VSS' && searchTerm) {
+    if (textSearchMode === 'SOFT_MATCH_AND_VSS') {
+      console.log('Performing soft match + VSS search');
       if (criteriaSearchFormData.provState == "") {
         alert('Please select a province.');
         return;
