@@ -13,8 +13,22 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
 
   const [snackbarOpen, setSnackbarOpen] = useState(false);
 
+  useEffect(() => {
+    // Ensure this code runs only in the client-side environment
+    const savedFormData = JSON.parse(localStorage.getItem('criteriaSearchFormData') || '{}');
+
+    setProvince(savedFormData.provState);
+    setCity(savedFormData.city || '');
+    setBedsInt(savedFormData.bedsInt || null);
+    setBathsInt(savedFormData.bathsInt || null);
+    setMinPrice(savedFormData.price ? savedFormData.price[0] : null);
+    setMaxPrice(savedFormData.price ? savedFormData.price[1] : null);
+
+  }, []);
+
   // Update the searchCriteria in the parent component whenever the form fields change
   useEffect(() => {
+
     const payload = {
       provState: province,
       city: city,
@@ -22,8 +36,18 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
       bathsInt: bathsInt,
       price: [minPrice, maxPrice],
     };
+    // Check that not all fields are empty
+    const isPayloadNotEmpty = payload.provState || payload.city || payload.bedsInt !== null || payload.bathsInt !== null || payload.price.some(price => price !== null);
+
+    if (isPayloadNotEmpty) {
+      // Save to localStorage
+      localStorage.setItem('criteriaSearchFormData', JSON.stringify(payload));
+    } else {
+      console.log('Empty payload not saved.');
+    }
+
     setSearchCriteria(payload);
-    onFormChange();    // Notify the parent component about the change
+    onFormChange(payload);    // Notify the parent component about the change
   }, [province, city, bedsInt, bathsInt, minPrice, maxPrice]);
   
   // Update state only if value is a non-negative integer

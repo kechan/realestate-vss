@@ -16,9 +16,17 @@ export default function Home({ bannerHeight}) {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
+  const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
+
+  const [textSearchMode, setTextSearchMode] = useState('VSS_ONLY');
+
   // Load the search results from Local Storage when the component mounts
   useEffect(() => {
+    // console.log('first effect')
     const savedSearchResults = localStorage.getItem('searchResults');
+    const savedSearchTerm = localStorage.getItem('searchTerm');
+    const savedTextSearchMode = localStorage.getItem('textSearchMode');
+
     if (savedSearchResults) {
       const results = JSON.parse(savedSearchResults);
       const searchType = localStorage.getItem('searchType');
@@ -27,7 +35,17 @@ export default function Home({ bannerHeight}) {
       }
       setSearchResults(results);
     }
+
+    if (savedSearchTerm) {
+      setSearchTerm(savedSearchTerm);
+    }
+
+    if (savedTextSearchMode) {
+      setTextSearchMode(savedTextSearchMode);
+    }
+    
   }, []); // Empty dependency array ensures this runs once on client-side mount
+  
 
   // Save the search results to Local Storage whenever they change
   useEffect(() => {
@@ -37,9 +55,12 @@ export default function Home({ bannerHeight}) {
     }
   }, [searchResults]); // Runs this effect whenever searchResults changes
 
-  const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
+  // useEffect(() => {
+  //   // Assuming textSearchMode is a state variable in your component
+  //   localStorage.setItem('textSearchMode', textSearchMode);
+  //   console.log('Saving textSearchMode to localStorage:', textSearchMode);
+  // }, [textSearchMode]);
 
-  const [textSearchMode, setTextSearchMode] = useState('VSS_ONLY');
 
   const handleFileChange = (file) => {
     setSelectedFile(file);
@@ -55,6 +76,7 @@ export default function Home({ bannerHeight}) {
 
   const handleSearchTermChange = (newSearchTerm) => {
     setSearchTerm(newSearchTerm);
+    localStorage.setItem('searchTerm', newSearchTerm);   // persists to work for browser back button
     // Clear the selectedFile when a searchTerm is entered
     if (selectedFile) {
       setSelectedFile(null);
@@ -69,11 +91,15 @@ export default function Home({ bannerHeight}) {
     handleSubmit(event);
   };
 
-  const handleCriteriaFormChange = () => {
+  const handleCriteriaFormChange = (updatedFormData) => {
+    // console.log('Entering handleCriteriaFormChange')
+    // console.log('Updated form data:', updatedFormData);
+
     if (selectedFile) {
       setSelectedFile(null);
       setSelectedFileUrl(null);
     }
+
     // its ok to include search term since this is both VSS + criteria search
     // if (searchTerm) {
     //   setSearchTerm('');
@@ -222,7 +248,13 @@ export default function Home({ bannerHeight}) {
                 <select className="text-search-mode-select" 
                         style={{ color: '#FFFFFF' }} 
                         value={textSearchMode} 
-                        onChange={e => setTextSearchMode(e.target.value)}
+                        // onChange={e => setTextSearchMode(e.target.value)}
+                        onChange={e => {
+                          const newMode = e.target.value;
+                          setTextSearchMode(newMode); // Update state
+                          localStorage.setItem('textSearchMode', newMode); // Save to localStorage
+                          console.log('Text search mode updated to:', newMode); // Optional: for debugging
+                        }}
                 >
                   <option value="VSS_ONLY">🔍 VSS ONLY </option>
                   <option value="SOFT_MATCH_AND_VSS">🔍📃 Soft Match + VSS</option>
