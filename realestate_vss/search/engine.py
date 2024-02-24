@@ -188,6 +188,19 @@ class ListingSearchEngine:
     top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
 
     return top_image_names, scores[0].tolist() #, image_features, top_k_indices
+  
+  def text_2_image_search(self, phrase: str, topk=5) -> Tuple[List[str], List[float]]:
+    """
+    Given a phrase, use VSS to search for images that match it conceptually.
+    """
+    query_embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)
+
+    scores, top_k_indices = self._query_faiss_index(self.faiss_image_index, query_embedding, topk=topk)
+    top_k_indices = top_k_indices[0, :]
+    top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
+
+    return top_image_names, scores[0].tolist()
+
 
   def visualize_image_search_results(self, image_names: List[str], scores: List[float], photos_dir: Path = '.') -> Image:
     resize = 350
@@ -229,9 +242,6 @@ class ListingSearchEngine:
       x_offset += img.width + margin
 
     return new_img
-
-
-
 
   def soft_match_score(self, listings_df: pd.DataFrame, query: Dict, alpha_val: float) -> pd.Series:
     soft_scores = pd.Series(np.ones(len(listings_df)), index=listings_df.index)

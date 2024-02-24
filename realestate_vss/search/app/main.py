@@ -115,7 +115,7 @@ async def get_listing(listingId: str) -> Dict[str, Any]:
   return listing_data
 
 @app.post("/search-by-image/")
-async def search_by_image(file: UploadFile = File(...)) ->List[Dict[str, Union[str, float , List[str]]]]:
+async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
     """
     Using the provided image file as query to the search engine, return a list of listings with images
     that are most similar to it.
@@ -225,6 +225,39 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
     raise HTTPException(status_code=404, detail="Invalid search mode")
   
   return results
+
+@app.post("/text-to-image-search/")
+async def text_to_image_search(query: str) -> List[Dict[str, Union[str, float , List[str]]]]:
+  try:
+    image_names, scores = search_engine.text_2_image_search(phrase=query, topk=50)
+  except Exception as e:
+    return f'search engine error: {e}'
+
+  listingId_to_image_names = {}
+  listingId_to_scores = {}
+  for image_name, score in zip(image_names, scores):
+    listingId = get_listingId_from_image_name(image_name)
+    if listingId not in listingId_to_image_names:
+      listingId_to_image_names[listingId] = []
+      listingId_to_scores[listingId] = []
+
+    listingId_to_image_names[listingId].append(image_name)
+    listingId_to_scores[listingId].append(score)
+
+  listings = []
+  for listingId, image_names in listingId_to_scores.items():
+    avg_score = np.mean(np.array(listingId_to_scores[listingId]))      
+    image_names = [f"{listingId}/{image_name}" for image_name in listingId_to_image_names[listingId]]
+    listings.append({
+      'listingId': listingId,
+      "avg_score": float(avg_score),
+      "image_names": image_names,
+    })
+
+  # Sort the listings by average score in descending order
+  listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
+
+  return listings
 
 
 # for testing before UI is built
