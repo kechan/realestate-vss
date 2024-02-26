@@ -17,7 +17,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
     // Ensure this code runs only in the client-side environment
     const savedFormData = JSON.parse(localStorage.getItem('criteriaSearchFormData') || '{}');
 
-    setProvince(savedFormData.provState);
+    setProvince(savedFormData.provState || null);
     setCity(savedFormData.city || '');
     setBedsInt(savedFormData.bedsInt || null);
     setBathsInt(savedFormData.bathsInt || null);
@@ -148,6 +148,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
             <FormControl variant="outlined" fullWidth className={`${styles.formControl} ${styles.noIndicator} ${styles.noNotch} ${styles.noBorder}`}>
               <InputLabel id="province-label">Province</InputLabel>
               <Select labelId="province-label" value={province} onChange={e => setProvince(e.target.value)} className={styles.selectEmpty}>
+                <MenuItem value={null}>Select a Province</MenuItem>
                 <MenuItem value="ON">Ontario</MenuItem>
                 <MenuItem value="BC">British Columbia</MenuItem>
                 <MenuItem value="AB">Alberta</MenuItem>
@@ -162,7 +163,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
               </Select>
             </FormControl>
           </Grid>
-          {searchMode !== 'VSS_ONLY' && (
+          {searchMode === 'SOFT_MATCH_AND_VSS' && (
             <>
               <Grid item xs={12}>
                 <FormControl fullWidth>

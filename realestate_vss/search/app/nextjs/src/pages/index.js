@@ -128,7 +128,7 @@ export default function Home({ bannerHeight}) {
     console.log('search mode:', textSearchMode);
     console.log('search term:', searchTerm); 
     event.preventDefault();
-    // setSearchResults([]); // don't clear this yet, otherwise the UX will flicker a lot
+    // setSearchResults([]); // don't clear this here, otherwise the UX will flicker a lot
 
     if (!selectedFile && !searchTerm && isFormDataEmpty(criteriaSearchFormData)) {
       alert('Please select a file, enter a search term, or fill out the criteria search form.');
@@ -140,7 +140,7 @@ export default function Home({ bannerHeight}) {
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
     // console.log('apiURL:', apiURL);
 
-    if (selectedFile) {   // perform image search
+    if (selectedFile) {   // perform image (to image) search
       const formData = new FormData();
       formData.append('file', selectedFile);
 
@@ -162,7 +162,7 @@ export default function Home({ bannerHeight}) {
     if (textSearchMode === 'VSS_ONLY') {
 
       if (searchTerm) {
-        if (criteriaSearchFormData.provState == "") {
+        if (criteriaSearchFormData.provState == "" || criteriaSearchFormData.provState == null) {
           alert('Please select a province.');
           return;
         }
@@ -221,6 +221,38 @@ export default function Home({ bannerHeight}) {
       }
       return
     }
+
+    if (textSearchMode === 'TEXT_TO_IMAGE_VSS') {
+      if (!searchTerm || searchTerm === "") {
+        alert('Please enter a search term.');
+        return;
+      }
+      const input_payload = {
+        phrase: searchTerm
+      }
+      try {
+        const response = await fetch(`${apiURL}/text-to-image-search/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(input_payload)
+        });
+        const data = await response.json();
+
+        data.searchType = 'image'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);        
+      }
+
+      return;
+    }
+
+    // we reach here if non of above conditions are met (this explicitly requires all above have a return)
+    alert(`Invalid search: selectedFile=${selectedFile}, selectedFileUrl=${selectedFileUrl} textSearchMode=${textSearchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
+
+    // TODO: if we get here, we should consider clear the previous search results and render an error
   };
 
   // Determine the class for the search-container based on presence or absence of search results
@@ -256,8 +288,9 @@ export default function Home({ bannerHeight}) {
                           console.log('Text search mode updated to:', newMode); // Optional: for debugging
                         }}
                 >
-                  <option value="VSS_ONLY">🔍 VSS ONLY </option>
-                  <option value="SOFT_MATCH_AND_VSS">🔍📃 Soft Match + VSS</option>
+                  <option value="VSS_ONLY">🔍 by Remarks only </option>
+                  <option value="SOFT_MATCH_AND_VSS">🔍📃 by Remarks and Criteria</option>
+                  <option value="TEXT_TO_IMAGE_VSS">📝➡️🖼️ Text to Image</option>
                 </select>
 
               </div>

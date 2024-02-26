@@ -227,9 +227,9 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
   return results
 
 @app.post("/text-to-image-search/")
-async def text_to_image_search(query: str) -> List[Dict[str, Union[str, float , List[str]]]]:
+async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str]]]]:
   try:
-    image_names, scores = search_engine.text_2_image_search(phrase=query, topk=50)
+    image_names, scores = search_engine.text_2_image_search(phrase=query['phrase'], topk=50)
   except Exception as e:
     return f'search engine error: {e}'
 
