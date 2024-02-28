@@ -2,6 +2,61 @@ import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
 import styles from '../../styles/[listingId].module.css';
 
+
+function PropertyIdentificationCard({ jumpId, streetName, city, provState, postalCode }) {
+  return (
+    <div className={styles.PropertyDetailsCard}>
+      <h2>Property Identification</h2>
+      <p><strong>Listing ID:</strong> {jumpId}</p>
+      <p><strong>Address:</strong> {`${streetName}, ${city}, ${provState}, ${postalCode}`}</p>
+    </div>
+  );
+}
+
+function PropertyDetailsCard({ propertyType, transactionType, price, leasePrice, beds, baths, sizeInterior, sizeInteriorUOM, lotSize, lotUOM, carriageTrade}) {
+  const displayPrice = transactionType === 'LEASE' ? leasePrice : price;
+
+  return (
+    <div className={styles.PropertyDetailsCard}>
+      <h2>Property Details</h2>
+      <p><strong>Type:</strong> {propertyType}</p>
+      <p><strong>Transaction:</strong> {transactionType}</p>
+      <p><strong>Price:</strong> {displayPrice.toLocaleString('en-US', { style: 'currency', currency: 'CAD' })}</p>
+      <p><strong>Beds:</strong> {beds}</p>
+      <p><strong>Baths:</strong> {baths}</p>
+      {sizeInterior && <p><strong>Interior Size:</strong> {`${sizeInterior} ${sizeInteriorUOM}`}</p>}
+      {lotSize && <p><strong>Lot Size:</strong> {`${lotSize} ${lotUOM}`}</p>}
+      {carriageTrade && <p><strong>Carriage Trade:</strong> {carriageTrade}</p>}
+    </div>
+  );
+}
+
+function PropertyFeaturesCard({ features }) {
+  return (
+    <div className={styles.PropertyDetailsCard}>
+      <h2>Property Features</h2>
+      <ul>
+        {features.parking && <li>Parking</li>}
+        {features.pool && <li>Pool</li>}
+        {features.garage && <li>Garage</li>}
+        {features.waterFront && <li>Waterfront</li>}
+        {features.fireplace && <li>Fireplace</li>}
+        {features.ac && <li>Air Conditioning</li>}
+      </ul>
+    </div>
+  );
+}
+
+function PropertyDescriptionCard({ remarks }) {
+  return (
+    <div className={styles.PropertyDetailsCard}>
+      <h2>Property Description</h2>
+      <p className={styles.PropertyDescription}>{remarks}</p>
+    </div>
+  );
+}
+
+
 export default function ListingDetail({bannerHeight}) {
   const router = useRouter();
   const { listingId } = router.query;
@@ -30,7 +85,8 @@ export default function ListingDetail({bannerHeight}) {
 
   if (error) {
     // console.log('Error:', error)
-    return <div>Failed to load listing</div>
+    // return <div>Failed to load listing</div>
+    return <div aria-live="assertive">{error}</div>
   }
   if (!data) return <div>Loading...</div>
 
@@ -48,9 +104,40 @@ export default function ListingDetail({bannerHeight}) {
           <p>Price: {data.price}</p>
         </>
       )} */}
-      {data && Object.keys(data).map(key => (
+      {/* {data && Object.keys(data).map(key => (
       <p key={key}>{key}: {String(data[key])}</p>
-      ))}
+      ))} */}
+      
+      <PropertyIdentificationCard
+        jumpId={data.jumpId}
+        streetName={data.streetName} 
+        city={data.city}
+        provState={data.provState}
+        postalCode={data.postalCode}
+      />
+      <PropertyDetailsCard
+        propertyType={data.propertyType}
+        transactionType={data.transactionType}
+        price={data.price}
+        leasePrice={data.leasePrice}
+        beds={data.beds}
+        baths={data.baths}
+        sizeInterior={data.sizeInterior}
+        sizeInteriorUOM={data.sizeInteriorUOM}
+        lotSize={data.lotSize}
+        lotUOM={data.lotUOM}
+      />
+      <PropertyFeaturesCard
+        features={{
+          parking: data.propertyFeatures.includes('parking'),
+          pool: data.pool,
+          garage: data.garage,
+          waterFront: data.waterFront,
+          fireplace: data.fireplace,
+          ac: data.ac
+        }}
+      />
+      <PropertyDescriptionCard remarks={data.remarks} />
     </div>
   );
 }
