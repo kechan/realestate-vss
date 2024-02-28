@@ -2,6 +2,7 @@ from typing import Dict, List, Union, Tuple, Any, Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel
 from realestate_vss.models.embedding import OpenClipTextEmbeddingModel, OpenClipImageEmbeddingModel
 from realestate_vss.search.engine import ListingSearchEngine, SearchMode
 
@@ -16,6 +17,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from PIL import Image
+
+
 
 app = FastAPI()
 # uvicorn main:app --reload &  # run this in terminal to start the server
@@ -105,14 +108,44 @@ async def startup_event():
         text_embedder=text_embedder
         )
 
+class ListingData(BaseModel):
+  jumpId: str
+  city: str
+  provState: str
+  postalCode: str
+  lat: float
+  lng: float
+  streetName: Optional[str] = None
+  beds: str
+  bedsInt: int
+  baths: str
+  bathsInt: int
+  sizeInterior: Optional[str] = None
+  sizeInteriorUOM: Optional[str] = None
+  lotSize: Optional[str] = None
+  lotUOM: Optional[str] = None
+  propertyFeatures: List[str]
+  propertyType: str
+  transactionType: str
+  carriageTrade: bool
+  price: int
+  leasePrice: int
+  pool: bool
+  garage: bool
+  waterFront: bool
+  fireplace: bool
+  ac: bool
+  remarks: Optional[str] = None
+  listing_id: str
+
 @app.get("/listing/{listingId}")
-async def get_listing(listingId: str) -> Dict[str, Any]:
+async def get_listing(listingId: str) -> ListingData:
   listing_data = search_engine.get_listing(listingId)
 
   if not listing_data:
       raise HTTPException(status_code=404, detail="Listing not found")
 
-  return listing_data
+  return ListingData(**listing_data)
 
 @app.post("/search-by-image/")
 async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
