@@ -36,7 +36,11 @@ app.add_middleware(
 search_engine = None
 
 # non global variables
-local_project_home = Path('/Volumes/Samsung_T7/jumptools_gdrive/NLImageSearch')
+if Path('/Volumes/Samsung_T7/jumptools_gdrive/NLImageSearch').is_dir():
+  local_project_home = Path('/Volumes/Samsung_T7/jumptools_gdrive/NLImageSearch')
+else:
+  local_project_home = Path('/home/jupyter/vss/')    # on google vm
+
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
 
