@@ -24,7 +24,7 @@ export default function ImageSearchResults({ searchResults }) {
           </div>
           <div className={imageSearchstyles.images}>
             {listing.image_names.map(image_name => (
-              <img key={image_name} src={`http://localhost:8000/images/${image_name}`} alt={`Listing ${listing.listingId}`} />
+              <img key={image_name} src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`} alt={`Listing ${listing.listingId}`} />
             ))}
           </div>
         </div>

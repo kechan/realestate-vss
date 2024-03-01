@@ -64,6 +64,9 @@ class ListingSearchEngine:
 
     return listing_data
 
+  def get_imagenames(self, listingId: str) -> List[str]:
+    return self.image_embeddings_df.q("listing_id == @listingId").image_name.values.tolist()
+
   def text_search(self, mode: SearchMode, topk=50, return_df=True, lambda_val=None, alpha_val=None, **query) -> Union[pd.DataFrame, List[Dict]]:    
     '''
     query: Dict with search attributes. Key of 'phrase' will use VSS r.p.t. to listing remarks

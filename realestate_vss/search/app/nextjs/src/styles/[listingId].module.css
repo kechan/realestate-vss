@@ -5,6 +5,18 @@
   min-height: 100vh;
 }
 
+.imageWrapper {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 1px;
+  /* background-color: black; */
+}
+
+.imageWrapper img {
+  width: 18%;
+  object-fit: cover;
+}
+
 .PropertyDetailsCard {
   background-color: #ffffff;
   border-radius: 4px;

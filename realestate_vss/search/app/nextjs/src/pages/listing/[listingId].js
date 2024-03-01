@@ -62,6 +62,7 @@ export default function ListingDetail({bannerHeight}) {
   const { listingId } = router.query;
 
   const [data, setData] = useState(null);
+  const [images, setImages] = useState([]);
   const [error, setError] = useState(null);
 
   // console.log('listingId:', listingId);
@@ -73,6 +74,12 @@ export default function ListingDetail({bannerHeight}) {
         const response = await fetch(`${apiURL}/listing/${listingId}`);
         const data = await response.json();
         setData(data);
+
+        const imageResponse = await fetch(`${apiURL}/images/${listingId}`);
+        const imagesData = await imageResponse.json();
+        setImages(imagesData.slice(0, 5));  // get 1st 5 for now
+        // console.log('imagesData:', imagesData.slice(0, 5));
+
       } catch (error) {
         setError(error);
       }
@@ -84,9 +91,8 @@ export default function ListingDetail({bannerHeight}) {
   }, [listingId]);
 
   if (error) {
-    // console.log('Error:', error)
     // return <div>Failed to load listing</div>
-    return <div aria-live="assertive">{error}</div>
+    return <div aria-live="assertive">Failed to load listings. {error}</div>
   }
   if (!data) return <div>Loading...</div>
 
@@ -94,7 +100,12 @@ export default function ListingDetail({bannerHeight}) {
 
   return (
     <div className={styles.pageWrapper} style={{ marginTop: bannerHeight }}>
-      <h1>Listing Detail for {listingId}</h1>
+      {/* <h1>Listing Detail for {listingId}</h1> */}
+      <div className={styles.imageWrapper}>
+        {images.map((image, index) => (
+          <img key={index} src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image}`} alt={`Listing ${listingId} Image ${index + 1}`} />
+        ))}
+      </div>
       {/* {data && (
         <>
           <p>City: {data.city}</p>

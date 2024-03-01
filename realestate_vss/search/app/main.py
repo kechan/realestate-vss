@@ -125,7 +125,7 @@ class ListingData(BaseModel):
   lotSize: Optional[str] = None
   lotUOM: Optional[str] = None
   propertyFeatures: List[str]
-  propertyType: str
+  propertyType: Optional[str] = None
   transactionType: str
   carriageTrade: bool
   price: int
@@ -144,8 +144,14 @@ async def get_listing(listingId: str) -> ListingData:
 
   if not listing_data:
       raise HTTPException(status_code=404, detail="Listing not found")
-
+  
   return ListingData(**listing_data)
+
+@app.get("/images/{listingId}")
+async def read_images(listingId: str) -> List[str]:
+  image_names = search_engine.get_imagenames(listingId)
+  image_names = [f"{listingId}/{image_name}" for image_name in image_names]
+  return image_names
 
 @app.post("/search-by-image/")
 async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
