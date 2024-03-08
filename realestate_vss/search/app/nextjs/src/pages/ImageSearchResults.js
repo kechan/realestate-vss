@@ -1,9 +1,35 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import searchStyles from '../styles/SearchResults.module.css';
 import imageSearchstyles from '../styles/ImageSearchResults.module.css';
 
 export default function ImageSearchResults({ searchResults }) {
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const modalRef = useRef();
+
+  const openModal = (image) => {
+    setSelectedImage(image);
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+  };
+
+  // const handleClickOutside = (event) => {
+  //   if (modalRef.current && !modalRef.current.contains(event.target)) {
+  //     closeModal();
+  //   }
+  // };
+
+  // useEffect(() => {
+  //   document.addEventListener("mousedown", handleClickOutside);
+  //   return () => {
+  //     document.removeEventListener("mousedown", handleClickOutside);
+  //   };
+  // });
+
   return (
     <div className={searchStyles['search-results']}>
       <div className={searchStyles['search-results-header']}>
@@ -24,11 +50,26 @@ export default function ImageSearchResults({ searchResults }) {
           </div>
           <div className={imageSearchstyles.images}>
             {listing.image_names.map(image_name => (
-              <img key={image_name} src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`} alt={`Listing ${listing.listingId}`} />
+              <img 
+                key={image_name} 
+                src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`} 
+                alt={`Listing ${listing.listingId}`} 
+                onClick={() => openModal(`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`)}
+              />
             ))}
           </div>
         </div>
       ))}
+      {modalVisible && (
+        <div className={imageSearchstyles.modal} onClick={closeModal}>
+          <div className={imageSearchstyles.modalWrapper} onClick={(e) => e.stopPropagation()}>
+            <div className={imageSearchstyles.modalContent}>
+              <img src={selectedImage} alt="Selected" className={imageSearchstyles.modalImage} />
+              <span className={imageSearchstyles.close} onClick={closeModal}>&times;</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

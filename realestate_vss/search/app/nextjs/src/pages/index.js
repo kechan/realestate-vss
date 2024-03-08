@@ -8,6 +8,8 @@ import CriteriaSearchForm from './CriteriaSearchForm';
 import ImageSearchResults from './ImageSearchResults'; 
 import TextSearchResults from './TextSearchResults';
 
+import { ClearCacheButton } from './Banner';
+
 
 export default function Home({ bannerHeight}) {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -296,6 +298,8 @@ export default function Home({ bannerHeight}) {
               </div>
             </Tooltip>
           </div>
+
+          <ClearCacheButton />
           
         </div>      
 

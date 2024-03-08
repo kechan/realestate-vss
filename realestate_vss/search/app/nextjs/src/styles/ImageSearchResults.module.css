@@ -14,3 +14,75 @@
   max-height: 200px;
   object-fit: cover;
 }
+
+/* Modal popup */
+
+.images {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-left: 0;
+  margin-left: -50px;
+}
+
+.images img {
+  margin-right: 10px;
+  max-width: 200px;
+  max-height: 200px;
+  object-fit: cover;
+}
+
+/* Modal popup */
+
+.modal {
+  position: fixed;
+  z-index: 1;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modalWrapper {
+  background-color: white;
+  padding: 20px; /* Increase padding to create space for the close button */
+  border-radius: 4px;
+  position: relative; /* Needed for absolute positioning of the close button */
+  width: auto; /* Adjust width as needed */
+  height: auto; /* Adjust height as needed */
+  /* Other styling as needed */
+}
+
+.modalContent {
+  /* Remove padding if previously set, as the padding is now on modalWrapper */
+  position: relative;
+}
+
+.modalImage {
+  display: block;
+  max-width: 100%; /* This will make sure the image fits within the padding */
+  height: auto;
+  /* Ensure there's no additional margin or padding that could offset the image */
+}
+
+.close {
+  position: absolute;
+  top: -20px; /* Position the close button from the top edge of modalWrapper */
+  right: -15px; /* Position the close button from the right edge of modalWrapper */
+  color: #000;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  z-index: 10; /* Ensure it's above other content */
+}
+
+.close:hover,
+.close:focus {
+  color: #bbb;
+  text-decoration: none;
+}

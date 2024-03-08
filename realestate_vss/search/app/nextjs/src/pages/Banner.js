@@ -1,6 +1,29 @@
 import React from 'react';
 import styles from '../styles/Banner.module.css'; // Assuming a CSS module for styling the banner
 
+export const ClearCacheButton = () => {
+  const clearCache = () => {
+    localStorage.clear();
+    alert('Cache cleared!');
+  }
+
+  return (
+    <button onClick={clearCache} style={{
+      position: 'absolute', 
+      bottom: '10px', 
+      right: '10px',
+      color: 'black', // Ensuring text color is black for visibility
+      backgroundColor: 'white', // Optional: if you want to add a background color
+      padding: '10px', // Optional: if you want to add some padding
+      borderRadius: '5px', // Optional: if you want to round the corners
+      border: 'none', // Optional: if you want to remove the default button border
+      cursor: 'pointer', // Optional: to show a pointer on hover
+    }}>
+      Clear Cache
+    </button>
+  );
+}
+
 const Banner = React.forwardRef((props, ref) => {
   return (
     <div className={styles.banner} ref={ref}>
@@ -19,6 +42,7 @@ const Banner = React.forwardRef((props, ref) => {
         <h1 className={styles.appName}>Multi-Cross-Modal Listing Search</h1>
       </div>
       <h2 className={styles.modalities}>Descriptive Text and Image</h2>
+      <h2 className={styles.modalities}>Searching over 1.4 million images (from ~48k listings) and 0.25 million remarks.</h2>
     </div>
   );
 });

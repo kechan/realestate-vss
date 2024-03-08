@@ -11,22 +11,28 @@ from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 
 from concurrent.futures import ThreadPoolExecutor
-import asyncio, io, json
+import asyncio, io, json, os
 import torch
 from pathlib import Path
 import pandas as pd
 import numpy as np
 from PIL import Image
 
-
+from dotenv import load_dotenv, find_dotenv
 
 app = FastAPI()
 # uvicorn main:app --reload &  # run this in terminal to start the server
 
 # Set up CORS middleware configuration
+_ = load_dotenv(find_dotenv())
+if "ALLOW_ORIGINS" in os.environ:
+  allow_origins = os.environ["ALLOW_ORIGINS"].split(',')
+else:
+  raise Exception("ALLOW_ORIGINS environment variable not set in .env file")
+
 app.add_middleware(
   CORSMiddleware,
-  allow_origins=["http://localhost:3000"],  # Allows all origins
+  allow_origins=allow_origins,  # Allows all origins
   allow_credentials=True,
   allow_methods=["*"],  # Allows all methods
   allow_headers=["*"],  # Allows all headers
@@ -36,10 +42,10 @@ app.add_middleware(
 search_engine = None
 
 # non global variables
-if Path('/Volumes/Samsung_T7/jumptools_gdrive/NLImageSearch').is_dir():
-  local_project_home = Path('/Volumes/Samsung_T7/jumptools_gdrive/NLImageSearch')
+if "LOCAL_PROJECT_HOME" in os.environ:
+  local_project_home = Path(os.getenv("LOCAL_PROJECT_HOME"))
 else:
-  local_project_home = Path('/home/jupyter/vss/')    # on google vm
+  raise Exception("LOCAL_PROJECT_HOME environment variable not set in .env file")
 
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
@@ -240,7 +246,7 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
 async def get_image(listingId: str, image_name: str) -> FileResponse:
   image_path = local_project_home / 'deployment_listing_images' / listingId / image_name
   if not image_path.is_file():
-      raise HTTPException(status_code=404, detail="Image not found")
+      raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
   return FileResponse(image_path)
 
 @app.post("/search-by-text/")
