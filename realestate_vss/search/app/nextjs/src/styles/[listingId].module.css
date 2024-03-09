@@ -7,15 +7,77 @@
 
 .imageWrapper {
   display: flex;
-  justify-content: space-between;
+  /* justify-content: space-between; */
+  overflow-x: auto;
   margin-bottom: 1px;
   /* background-color: black; */
+  gap: 10px;
+  padding: 10px 0;
+  align-items: center;
 }
 
 .imageWrapper img {
   width: 18%;
+  display: block; /* Ensures that the images line up correctly without extra space */
+  max-width: 100%; /* This will depend on your design needs */
+  height: auto; /* Maintain aspect ratio */
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1); /* Optional shadow */
+  border-radius: 4px; /* Optional rounded corners */
   object-fit: cover;
 }
+
+.modal {
+  position: fixed; /* Stay in place */
+  z-index: 10; /* Sit on top */
+  left: 0;
+  top: 0;
+  width: 100%; /* Full width */
+  height: 100%; /* Full height */
+  overflow: auto; /* Enable scroll if needed */
+  background-color: rgba(0,0,0,0.5); /* Black w/ opacity */
+  display: flex; /* Enable flex */
+  align-items: center; /* Vertical center */
+  justify-content: center; /* Horizontal center */
+}
+
+.modalWrapper {
+  /* Remove padding-top if previously set */
+  width: 90%; /* You might want to adjust this */
+  max-width: 500px; /* Or whatever width you want */
+  /* You can remove margin if you are centering with flex */
+}
+
+.modalContent {
+  position: relative;
+  background-color: #fefefe;
+  padding: 20px;
+  border: 1px solid #888;
+  border-radius: 5px;
+  /* Add box-shadow if you want to add depth to your modal */
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+}
+
+.modalImage {
+  width: 100%; /* Or keep the original size */
+  height: auto;
+}
+
+.close {
+  position: absolute;
+  top: 0px; /* Adjust as necessary to align with the top edge of the modal */
+  right: 10px; /* Adjust as necessary to align with the right edge of the modal */
+  color: #000; /* Dark color when unfocused */
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: color 0.3s; /* Smooth transition for color change */
+}
+
+.close:hover,
+.close:focus {
+  color: #aaa; /* Lighter color when focused or hovered */
+}
+
 
 .PropertyDetailsCard {
   background-color: #ffffff;
@@ -50,3 +112,4 @@
   margin-top: 8px;
   text-align: justify; /* This can make paragraphs easier to read */
 }
+

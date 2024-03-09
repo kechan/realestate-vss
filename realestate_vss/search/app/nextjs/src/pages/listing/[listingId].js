@@ -1,5 +1,5 @@
 import { useRouter } from 'next/router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import styles from '../../styles/[listingId].module.css';
 
 
@@ -65,7 +65,19 @@ export default function ListingDetail({bannerHeight}) {
   const [images, setImages] = useState([]);
   const [error, setError] = useState(null);
 
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const modalRef = useRef();
+
   // console.log('listingId:', listingId);
+  const openModal = (imageUrl) => {
+    setSelectedImage(imageUrl);
+    setModalVisible(true);
+  };
+  
+  const closeModal = () => {
+    setModalVisible(false);
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -77,7 +89,8 @@ export default function ListingDetail({bannerHeight}) {
 
         const imageResponse = await fetch(`${apiURL}/images/${listingId}`);
         const imagesData = await imageResponse.json();
-        setImages(imagesData.slice(0, 5));  // get 1st 5 for now
+        // setImages(imagesData.slice(0, 5));  // get 1st 5 for now
+        setImages(imagesData);  // get all image urls
         // console.log('imagesData:', imagesData.slice(0, 5));
 
       } catch (error) {
@@ -103,18 +116,25 @@ export default function ListingDetail({bannerHeight}) {
       {/* <h1>Listing Detail for {listingId}</h1> */}
       <div className={styles.imageWrapper}>
         {images.map((image, index) => (
-          <img key={index} src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image}`} alt={`Listing ${listingId} Image ${index + 1}`} />
+          <img 
+            key={index} 
+            src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image}`} 
+            alt={`Listing ${listingId} Image ${index + 1}`} 
+            onClick={() => openModal(`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image}`)}
+          />
         ))}
       </div>
-      {/* {data && (
-        <>
-          <p>City: {data.city}</p>
-          <p>Street Name: {data.streetName}</p>
-          <p>Beds: {data.beds}</p>
-          <p>Baths: {data.baths}</p>
-          <p>Price: {data.price}</p>
-        </>
-      )} */}
+      {modalVisible && (
+        <div className={styles.modal} onClick={closeModal}>
+          <div className={styles.modalWrapper} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalContent}>
+              <img src={selectedImage} alt="Selected" className={styles.modalImage} />
+              <span className={styles.close} onClick={closeModal}>&times;</span>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* {data && Object.keys(data).map(key => (
       <p key={key}>{key}: {String(data[key])}</p>
       ))} */}
