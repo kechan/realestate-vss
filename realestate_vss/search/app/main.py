@@ -1,7 +1,7 @@
 from typing import Dict, List, Union, Tuple, Any, Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from realestate_vss.models.embedding import OpenClipTextEmbeddingModel, OpenClipImageEmbeddingModel
 from realestate_vss.search.engine import ListingSearchEngine, SearchMode
@@ -19,6 +19,8 @@ import numpy as np
 from PIL import Image
 
 from dotenv import load_dotenv, find_dotenv
+
+from google.cloud import storage
 
 app = FastAPI()
 # uvicorn main:app --reload &  # run this in terminal to start the server
@@ -49,6 +51,15 @@ else:
 
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
+
+if "GCS_PROJECT_ID" in os.environ and "GCS_BUCKET_NAME" in os.environ:
+  GCS_PROJECT_ID = os.getenv("GCS_PROJECT_ID")
+  GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+  storage_client = storage.Client(project=GCS_PROJECT_ID)
+  bucket = storage_client.bucket(GCS_BUCKET_NAME)
+else:
+  bucket = None
+
 
 async def load_images_dataframe():
   loop = asyncio.get_event_loop()
@@ -91,7 +102,7 @@ async def load_texts_dataframe():
     text_embeddings_df = await loop.run_in_executor(
       pool,
       join_df,
-      listing_df, text_embeddings_df, 'jumpId', 'listing_id'
+      listing_df, text_embeddings_df, 'jumpId', 'listing_id', 'inner'
     )
 
   return text_embeddings_df
@@ -245,9 +256,23 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
 @app.get("/images/{listingId}/{image_name}")
 async def get_image(listingId: str, image_name: str) -> FileResponse:
   image_path = local_project_home / 'deployment_listing_images' / listingId / image_name
-  if not image_path.is_file():
-      raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
-  return FileResponse(image_path)
+  # if not image_path.is_file():
+  #     raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
+  if image_path.is_file():
+    # serve from local directory
+    return FileResponse(image_path)
+  else:
+    # serve from GCS
+    blob = bucket.blob(f"VSS/{listingId}/{image_name}")
+    if not blob.exists():
+      raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
+    
+    def generate_image():
+      yield blob.download_as_bytes()
+
+    content_type = 'image/jpeg'
+
+    return StreamingResponse(generate_image(), media_type=content_type)
 
 @app.post("/search-by-text/")
 async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[List[Optional[int]]]]], 
