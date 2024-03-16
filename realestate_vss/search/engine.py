@@ -17,7 +17,7 @@ class SearchMode(str, Enum):
   SOFT_MATCH_AND_VSS = "SOFT_MATCH_AND_VSS"
 
 class ListingSearchEngine:
-  def __init__(self, image_embeddings_df, text_embeddings_df, image_embedder, text_embedder):
+  def __init__(self, image_embeddings_df, text_embeddings_df, image_embedder, text_embedder, partition_by_province=True):
     '''
     image_embeddings_df: pd.DataFrame with columns ['listing_id', 'image_name', 'embedding']
     text_embeddings_df: pd.DataFrame with columns jumpId, embedding, and structured data attributes
@@ -31,24 +31,35 @@ class ListingSearchEngine:
     self.image_embedder = image_embedder
     self.text_embedder = text_embedder
 
-    # partition by province
-    self.provStates = ['ON', 'BC', 'AB', 'SK', 'NS', 'NB', 'QC', 'NL', 'PE', 'MB', 'YT']
-    self.text_embeddings_df_by_prov = {}
-    for provState in self.provStates:
-      self.text_embeddings_df_by_prov[provState] = text_embeddings_df.q("provState == @provState").copy()
+    self.partition_by_province = partition_by_province
+
+    if self.partition_by_province:
+      # partition by province
+      self.provStates = ['ON', 'BC', 'AB', 'SK', 'NS', 'NB', 'QC', 'NL', 'PE', 'MB', 'YT']
+      self.text_embeddings_df_by_prov = {}
+      for provState in self.provStates:
+        self.text_embeddings_df_by_prov[provState] = text_embeddings_df.q("provState == @provState").copy()
+
+      # text, partition by province
+      self.faiss_text_index = {}
+      for provState in self.provStates:
+        df = self.text_embeddings_df_by_prov[provState]
+        text_embeddings = np.stack(df.embedding.values)
+        self.faiss_text_index[provState] = self._build_faiss_index(text_embeddings)
+    else:
+      # text, no partition
+      text_embeddings = np.stack(text_embeddings_df.embedding.values)
+      self.faiss_text_index = self._build_faiss_index(text_embeddings)
 
     # use FAISS to construct index and VSS query
     # image
     self.faiss_image_index = self._build_faiss_index(image_embeddings)
 
-    # text, partition by province
-    self.faiss_text_index = {}
-    for provState in self.provStates:
-      df = self.text_embeddings_df_by_prov[provState]
-      text_embeddings = np.stack(df.embedding.values)
-      self.faiss_text_index[provState] = self._build_faiss_index(text_embeddings)
 
   def get_listing(self, listingId: str) -> Dict[str, Any]:
+    """
+    Get the listing data for a given listingId
+    """
     listing = self.text_embeddings_df.q("jumpId == @listingId")
     if len(listing) == 0:   # search the image set
       listing = self.image_embeddings_df.q("listing_id == @listingId")
@@ -85,30 +96,43 @@ class ListingSearchEngine:
 
       query_string = " & ".join(query_conditions)
 
-      df = self.text_embeddings_df_by_prov[provState].q(query_string)
+      if self.partition_by_province:
+        df = self.text_embeddings_df_by_prov[provState].q(query_string)
+      else:
+        df = self.text_embeddings_df.q(query_string)
       conditional_matched_listingIds = df.jumpId.values.tolist()
 
       return conditional_matched_listingIds
 
     def vss_search(phrase, topk=50) -> Tuple[List[str], List[float]]:
       text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)
-      scores, top_k_indices = self._query_faiss_index(self.faiss_text_index[provState], text_features, topk=topk)
+      if self.partition_by_province:
+        scores, top_k_indices = self._query_faiss_index(self.faiss_text_index[provState], text_features, topk=topk)
+      else:
+        scores, top_k_indices = self._query_faiss_index(self.faiss_text_index, text_features, topk=topk)
 
       top_k_indices = top_k_indices[0, :]
-      top_listingIds = self.text_embeddings_df_by_prov[provState].iloc[top_k_indices].jumpId.values.tolist()
+      if self.partition_by_province:
+        top_listingIds = self.text_embeddings_df_by_prov[provState].iloc[top_k_indices].jumpId.values.tolist()
+      else:
+        top_listingIds = self.text_embeddings_df.iloc[top_k_indices].jumpId.values.tolist()
 
       return top_listingIds, scores[0].tolist()
 
-    provState = query['provState']
+    # provState = query['provState']
     phrase = query.get('phrase')
 
     if mode == SearchMode.VSS_RERANK_ONLY:
+      provState = query['provState']
       matched_listingIds = exact_conditional_match(**query)
       if phrase is None:        
         scores = np.ones(len(matched_listingIds)).tolist()    # assign all 1s to scores
       else:
-        
-        top_listingIds, scores = vss_search(phrase, topk=self.text_embeddings_df_by_prov[provState].shape[0])
+        # TODO returning that many topk results is not efficient
+        if self.partition_by_province:  
+          top_listingIds, scores = vss_search(phrase, topk=self.text_embeddings_df_by_prov[provState].shape[0])
+        else:
+          top_listingIds, scores = vss_search(phrase, topk=self.text_embeddings_df.shape[0])
 
         # sort matched_listingIds by scores
         score_map = dict(zip(top_listingIds, scores))
@@ -123,20 +147,27 @@ class ListingSearchEngine:
         scores = [x[1] for x in sorted_scored_matches]
 
     elif mode == SearchMode.VSS_ONLY:
-      assert phrase is not None, 'Must provide phrase for VSS_ONLY search'
+      assert phrase is not None, 'Must provide phrase for VSS_ONLY search'      
 
       top_listingIds, scores = vss_search(phrase, topk=topk)
       matched_listingIds = top_listingIds
 
     elif mode == SearchMode.SOFT_MATCH_AND_VSS:
       assert lambda_val is not None and alpha_val is not None, 'Must provide lambda_val and alpha_val for SOFT_MATCH_AND_VSS search'
+      provState = query['provState']
       if phrase is not None:
-        top_listingsIds, vss_scores = vss_search(phrase, topk=self.text_embeddings_df_by_prov[provState].shape[0])
+        if self.partition_by_province:
+          top_listingsIds, vss_scores = vss_search(phrase, topk=self.text_embeddings_df_by_prov[provState].shape[0])
+        else:
+          top_listingsIds, vss_scores = vss_search(phrase, topk=self.text_embeddings_df.shape[0])
         vss_score_df = pd.DataFrame(data={'jumpId': top_listingsIds, 'vss_score': vss_scores})
       else:
         raise ValueError('Must provide phrase for SOFT_MATCH_AND_VSS search')
 
-      listings_df = self.text_embeddings_df_by_prov[provState]
+      if self.partition_by_province:
+        listings_df = self.text_embeddings_df_by_prov[provState]
+      else:
+        listings_df = self.text_embeddings_df.q("provState == @provState")
       soft_scores = self.soft_match_score(listings_df, query, alpha_val)
 
       # Merge soft scores with listings_df for the calculation
@@ -155,10 +186,16 @@ class ListingSearchEngine:
     else:
       raise ValueError(f'Unknown search mode {mode}')
 
-    result_df = join_df(
-        pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
-        self.text_embeddings_df_by_prov[provState], 
-        left_on='jumpId', how='inner')
+    if self.partition_by_province:
+      result_df = join_df(
+          pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
+          self.text_embeddings_df_by_prov[provState], 
+          left_on='jumpId', how='inner')
+    else:
+      result_df = join_df(
+          pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
+          self.text_embeddings_df, 
+          left_on='jumpId', how='inner')
     
     if return_df:
       return result_df
@@ -203,6 +240,75 @@ class ListingSearchEngine:
     top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
 
     return top_image_names, scores[0].tolist()
+  
+  def text_2_image_text_search(self, phrase: str, topk=5) -> List[Dict[str, Union[str, float , List[str], str]]]:
+    """
+    Given text, search against both image vector index and text vector index and return the combined results.
+    """
+
+    # perform text search (use VSS for now)  # TODO: could change later
+    text_results = self.text_search(SearchMode.VSS_ONLY, phrase=phrase, topk=topk, return_df=False)    
+    text_results = [{**x, 'listingId': x['listing_id']} for x in text_results]   # add the key listingId
+
+    # perform text to image search
+    top_image_names, top_scores = self.text_2_image_search(phrase, topk=topk)
+
+    listings_from_image_search = self._gen_listings_from_image_search(top_image_names, top_scores)
+
+    # add in remarks wherever available
+    for listing in listings_from_image_search:
+      listingId = listing['listingId']
+      listing_info = self.get_listing(listingId)
+      remarks = listing_info.get('remarks', '')
+      listing['remarks'] = remarks
+    
+    # Normalize scores
+    text_results = self.normalize_scores(text_results, 'score')
+    listings_from_image_search = self.normalize_scores(listings_from_image_search, 'avg_score')
+
+    # keep only listingId, score and remarks
+    # text_results = [{k: x[k] for k in ['listingId', 'score', 'remarks']} for x in text_results]
+      
+    # Merge results
+    combined_results = self.merge_results(text_results, listings_from_image_search)
+
+    combined_results.sort(key=lambda x: x['avg_score'], reverse=True)
+
+    return combined_results
+  
+  def normalize_scores(self, results: List[Dict], score_key: str) -> List[Dict]:
+    scores = [result[score_key] for result in results]
+    min_score = min(scores)
+    max_score = max(scores)
+    for result in results:
+      result[score_key] = (result[score_key] - min_score) / (max_score - min_score)
+    return results
+  
+  def merge_results(self, text_results: List[Dict], image_results: List[Dict]) -> List[Dict]:
+    # Convert image_results to a dictionary for easy lookup
+    listings_dict = {listing['listingId']: listing for listing in image_results}
+
+    # Merge text_results into listings_dict
+    for result in text_results:
+      listingId = result['listingId']
+      if listingId in listings_dict:
+        # Add score to avg_score
+        listings_dict[listingId]['avg_score'] += result['score']
+      else:
+        # Add new listing to listings_dict
+        listings_dict[listingId] = {
+            'listingId': listingId,
+            'avg_score': result['score'],
+            'remarks': result['remarks'],
+            'image_names': []
+        }
+
+    # Convert listings_dict back to a list
+    combined_results = list(listings_dict.values())
+
+    return combined_results
+
+
 
 
   def visualize_image_search_results(self, image_names: List[str], scores: List[float], photos_dir: Path = '.') -> Image:
@@ -247,6 +353,17 @@ class ListingSearchEngine:
     return new_img
 
   def soft_match_score(self, listings_df: pd.DataFrame, query: Dict, alpha_val: float) -> pd.Series:
+    """
+    Calculates a soft match score for each listing in the DataFrame based on the provided query.
+    
+    The query is a dictionary where each key-value pair represents a condition that the listings should meet.
+    If a listing does not meet a condition, its score is reduced by a factor of alpha_val.
+    
+    For range conditions (specified as a tuple or list of length 2), the between function is used.
+    For single-value conditions, direct comparison is used.
+    
+    Returns a pandas Series with the final scores for each listing. The higher the score, the better the listing matches the query.
+    """
     soft_scores = pd.Series(np.ones(len(listings_df)), index=listings_df.index)
 
     for key, value in query.items():
@@ -290,3 +407,29 @@ class ListingSearchEngine:
     return similarity_scores, I
 
 
+  def _gen_listings_from_image_search(self, image_names: List[str], scores: List[float]) -> List[Dict[str, Union[str, float, List[str]]]]:
+    """
+    Given a list of image names and their scores, generate a list of listings with the average score and image names for that listing
+    """
+    listingId_to_image_names = {}
+    listingId_to_scores = {}
+    for image_name, score in zip(image_names, scores):
+      listingId = get_listingId_from_image_name(image_name)
+      if listingId not in listingId_to_image_names:
+        listingId_to_image_names[listingId] = []
+        listingId_to_scores[listingId] = []
+
+      listingId_to_image_names[listingId].append(image_name)
+      listingId_to_scores[listingId].append(score)
+
+    listings = []
+    for listingId, image_names in listingId_to_scores.items():
+      avg_score = np.mean(np.array(listingId_to_scores[listingId]))      
+      image_names = [f"{listingId}/{image_name}" for image_name in listingId_to_image_names[listingId]]
+      listings.append({
+        'listingId': listingId,
+        "avg_score": float(avg_score),
+        "image_names": image_names,
+      })
+
+    return listings

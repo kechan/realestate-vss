@@ -31,17 +31,41 @@ function PropertyDetailsCard({ propertyType, transactionType, price, leasePrice,
   );
 }
 
-function PropertyFeaturesCard({ features }) {
+// function PropertyFeaturesCard({ features }) {
+//   return (
+//     <div className={styles.PropertyDetailsCard}>
+//       <h2>Property Features</h2>
+//       <ul>
+//         {features.parking && <li>Parking</li>}
+//         {features.pool && <li>Pool</li>}
+//         {features.garage && <li>Garage</li>}
+//         {features.waterFront && <li>Waterfront</li>}
+//         {features.fireplace && <li>Fireplace</li>}
+//         {features.ac && <li>Air Conditioning</li>}
+//       </ul>
+//     </div>
+//   );
+// }
+
+function PropertyFeaturesCard({ features, propertyFeatures }) {
+  const allFeatures = [
+    ...propertyFeatures,
+    features.pool && 'Pool',
+    features.garage && 'Garage',
+    features.waterFront && 'Waterfront',
+    features.fireplace && 'Fireplace',
+    features.ac && 'Air Conditioning',
+  ].filter(Boolean); // remove false values
+
+  const uniqueFeatures = [...new Set(allFeatures.map(feature => feature.toLowerCase()))];
+
   return (
     <div className={styles.PropertyDetailsCard}>
       <h2>Property Features</h2>
       <ul>
-        {features.parking && <li>Parking</li>}
-        {features.pool && <li>Pool</li>}
-        {features.garage && <li>Garage</li>}
-        {features.waterFront && <li>Waterfront</li>}
-        {features.fireplace && <li>Fireplace</li>}
-        {features.ac && <li>Air Conditioning</li>}
+        {uniqueFeatures.map((feature, index) => (
+          <li key={index}>{feature}</li>
+        ))}
       </ul>
     </div>
   );
@@ -111,6 +135,8 @@ export default function ListingDetail({bannerHeight}) {
 
   // console.log('data:', data);
 
+  const isDetailsAvailable = data.streetName || data.city || data.provState || data.postalCode || data.propertyType || data.transactionType || data.price || data.leasePrice || data.beds || data.baths || data.sizeInterior || data.sizeInteriorUOM || data.lotSize || data.lotUOM || data.propertyFeatures || data.remarks;
+
   return (
     <div className={styles.pageWrapper} style={{ marginTop: bannerHeight }}>
       {/* <h1>Listing Detail for {listingId}</h1> */}
@@ -139,6 +165,8 @@ export default function ListingDetail({bannerHeight}) {
       <p key={key}>{key}: {String(data[key])}</p>
       ))} */}
       
+      {isDetailsAvailable ? (
+        <>
       <PropertyIdentificationCard
         jumpId={data.jumpId}
         streetName={data.streetName} 
@@ -158,9 +186,19 @@ export default function ListingDetail({bannerHeight}) {
         lotSize={data.lotSize}
         lotUOM={data.lotUOM}
       />
-      <PropertyFeaturesCard
+      {/* <PropertyFeaturesCard
         features={{
-          parking: data.propertyFeatures.includes('parking'),
+          parking: data.propertyFeatures ? data.propertyFeatures.includes('parking') : false,
+          pool: data.pool,
+          garage: data.garage,
+          waterFront: data.waterFront,
+          fireplace: data.fireplace,
+          ac: data.ac
+        }}
+      /> */}
+      <PropertyFeaturesCard 
+        propertyFeatures={data.propertyFeatures || []} 
+        features={{
           pool: data.pool,
           garage: data.garage,
           waterFront: data.waterFront,
@@ -169,6 +207,13 @@ export default function ListingDetail({bannerHeight}) {
         }}
       />
       <PropertyDescriptionCard remarks={data.remarks} />
+      </>
+      ) : (
+        <div className={styles.noDetails}>
+          <h2>Details Not Available</h2>
+          <p>Sorry, the details for this listing are not available at this time.</p>
+        </div>
+      ) }
     </div>
   );
 }

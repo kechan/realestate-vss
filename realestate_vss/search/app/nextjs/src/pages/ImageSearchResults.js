@@ -36,30 +36,38 @@ export default function ImageSearchResults({ searchResults }) {
         <h2>Listing</h2>
         <h2>Score</h2>
         <h2>Images</h2>
+        {/* <h2>Remarks</h2> */}
       </div>
-      {searchResults.map(listing => (
-        <div key={listing.listingId} className={searchStyles.listing}>
-          <div className={searchStyles['listing-id']}>
-            {/* {listing.listingId} */}
-            <Link href={`/listing/${listing.listingId}`} passHref>
-              <span className={searchStyles['listing-link']}>{listing.listingId}</span>
-            </Link>
+      {searchResults.map(listing => {
+        return (
+          <div key={listing.listingId} className={searchStyles.listing}>
+            <div className={searchStyles['listing-id']}>
+              {/* {listing.listingId} */}
+              <Link href={`/listing/${listing.listingId}`} passHref>
+                <span className={searchStyles['listing-link']}>{listing.listingId}</span>
+              </Link>
+            </div>
+            <div className={searchStyles['listing-score']}>
+              {listing.avg_score ? parseFloat(listing.avg_score).toFixed(2) : 'N/A'}
+            </div>
+            <div className={imageSearchstyles.images}>
+              {listing.image_names.map(image_name => (
+                <img 
+                  key={image_name} 
+                  src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`} 
+                  alt={`Listing ${listing.listingId}`} 
+                  onClick={() => openModal(`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`)}
+                />
+              ))}
+            </div>
+            {listing.remarks && (
+              <div className={searchStyles['listing-remarks']}>
+                {listing.remarks.length > 50 ? listing.remarks.substring(0, 50) + '...' : listing.remarks}
+              </div>
+            )}
           </div>
-          <div className={searchStyles['listing-score']}>
-            {listing.avg_score ? parseFloat(listing.avg_score).toFixed(2) : 'N/A'}
-          </div>
-          <div className={imageSearchstyles.images}>
-            {listing.image_names.map(image_name => (
-              <img 
-                key={image_name} 
-                src={`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`} 
-                alt={`Listing ${listing.listingId}`} 
-                onClick={() => openModal(`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/images/${image_name}`)}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
       {modalVisible && (
         <div className={imageSearchstyles.modal} onClick={closeModal}>
           <div className={imageSearchstyles.modalWrapper} onClick={(e) => e.stopPropagation()}>

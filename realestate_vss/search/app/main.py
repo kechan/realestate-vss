@@ -126,7 +126,8 @@ async def startup_event():
         image_embeddings_df=image_embeddings_df, 
         text_embeddings_df=text_embeddings_df, 
         image_embedder=image_embedder, 
-        text_embedder=text_embedder
+        text_embedder=text_embedder,
+        partition_by_province=False
         )
 
 class ListingData(BaseModel):
@@ -159,14 +160,23 @@ class ListingData(BaseModel):
   remarks: Optional[str] = None
   listing_id: str
 
+class PartialListingData(BaseModel):
+  jumpId: str
+  image_name: Optional[str] = None
+
 @app.get("/listing/{listingId}")
-async def get_listing(listingId: str) -> ListingData:
+async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
   listing_data = search_engine.get_listing(listingId)
 
   if not listing_data:
       raise HTTPException(status_code=404, detail="Listing not found")
   
-  return ListingData(**listing_data)
+  if set(listing_data.keys()) == set(['listing_id', 'image_name']):
+    # Replace 'listing_id' with 'jumpId'
+    listing_data['jumpId'] = listing_data.pop('listing_id')
+    return PartialListingData(**listing_data)
+  else:
+    return ListingData(**listing_data)
 
 @app.get("/images/{listingId}")
 async def read_images(listingId: str) -> List[str]:
@@ -227,26 +237,8 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
     # image names are of format {listingId}_{imageId}.jpg, we want to organize by listingId
     # such that we get a dict whose keys are listing_ids and values are list of image names
     # and another dict whose keys are listing_ids and values are list of corresponding scores
-    listingId_to_image_names = {}
-    listingId_to_scores = {}
-    for image_name, score in zip(image_names, scores):
-      listingId = get_listingId_from_image_name(image_name)
-      if listingId not in listingId_to_image_names:
-        listingId_to_image_names[listingId] = []
-        listingId_to_scores[listingId] = []
 
-      listingId_to_image_names[listingId].append(image_name)
-      listingId_to_scores[listingId].append(score)
-
-    listings = []
-    for listingId, image_names in listingId_to_scores.items():
-      avg_score = np.mean(np.array(listingId_to_scores[listingId]))      
-      image_names = [f"{listingId}/{image_name}" for image_name in listingId_to_image_names[listingId]]
-      listings.append({
-        'listingId': listingId,
-        "avg_score": float(avg_score),
-        "image_names": image_names,
-      })
+    listings = search_engine._gen_listings_from_image_search(image_names, scores)
 
     # Sort the listings by average score in descending order
     listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
@@ -307,30 +299,20 @@ async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[st
   except Exception as e:
     return f'search engine error: {e}'
 
-  listingId_to_image_names = {}
-  listingId_to_scores = {}
-  for image_name, score in zip(image_names, scores):
-    listingId = get_listingId_from_image_name(image_name)
-    if listingId not in listingId_to_image_names:
-      listingId_to_image_names[listingId] = []
-      listingId_to_scores[listingId] = []
-
-    listingId_to_image_names[listingId].append(image_name)
-    listingId_to_scores[listingId].append(score)
-
-  listings = []
-  for listingId, image_names in listingId_to_scores.items():
-    avg_score = np.mean(np.array(listingId_to_scores[listingId]))      
-    image_names = [f"{listingId}/{image_name}" for image_name in listingId_to_image_names[listingId]]
-    listings.append({
-      'listingId': listingId,
-      "avg_score": float(avg_score),
-      "image_names": image_names,
-    })
+  listings = search_engine._gen_listings_from_image_search(image_names, scores)
 
   # Sort the listings by average score in descending order
   listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
 
+  return listings
+
+@app.post("/text-to-image-text-search/")
+async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str], str]]]:
+  try:
+    listings = search_engine.text_2_image_text_search(phrase=query['phrase'], topk=50)
+  except Exception as e:
+    return f'search engine error: {e}'
+  
   return listings
 
 

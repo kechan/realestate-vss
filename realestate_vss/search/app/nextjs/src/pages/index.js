@@ -20,7 +20,7 @@ export default function Home({ bannerHeight}) {
 
   const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
 
-  const [textSearchMode, setTextSearchMode] = useState('VSS_ONLY');
+  const [textSearchMode, setTextSearchMode] = useState('TEXT_TO_IMAGE_TEXT_VSS');
 
   // Load the search results from Local Storage when the component mounts
   useEffect(() => {
@@ -251,6 +251,33 @@ export default function Home({ bannerHeight}) {
       return;
     }
 
+    if (textSearchMode === 'TEXT_TO_IMAGE_TEXT_VSS') {
+      if (!searchTerm || searchTerm === "") {
+        alert('Please enter a search term.');
+        return;
+      }
+      const input_payload = {
+        phrase: searchTerm
+      }
+      try {
+        const response = await fetch(`${apiURL}/text-to-image-text-search/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(input_payload)
+        });
+        const data = await response.json();
+
+        data.searchType = 'image'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);        
+      }
+
+      return;
+
+    }
     // we reach here if non of above conditions are met (this explicitly requires all above have a return)
     alert(`Invalid search: selectedFile=${selectedFile}, selectedFileUrl=${selectedFileUrl} textSearchMode=${textSearchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
 
@@ -275,7 +302,7 @@ export default function Home({ bannerHeight}) {
           <button className="search-btn" onClick={handleSubmit}>Search</button>
         
           <div className="text-search-model-select-container">
-            <Tooltip title="Choose a search mode: 'VSS ONLY' for only Vector Similarity Search, 'Soft Match + VSS' for a mix of criteria matching and VSS." placement="top">
+            <Tooltip title="Choose 'by Remarks only' for pure Vector Similarity Search, 'by Remarks and Criteria' for a mix of criteria matching and VSS." placement="top">
               <div>
 
                 {/* <label for="text-search-mode-select">Mode:</label> */}
@@ -292,7 +319,8 @@ export default function Home({ bannerHeight}) {
                 >
                   <option value="VSS_ONLY">🔍 by Remarks only </option>
                   <option value="SOFT_MATCH_AND_VSS">🔍📃 by Remarks and Criteria</option>
-                  <option value="TEXT_TO_IMAGE_VSS">📝➡️🖼️ Text to Image</option>
+                  <option value="TEXT_TO_IMAGE_VSS">📝 &rarr; 🖼️ Text to Image</option>
+                  <option value="TEXT_TO_IMAGE_TEXT_VSS">📝 &rarr; 🖼️+📝 Text to Image&Remarks</option>
                 </select>
 
               </div>
@@ -387,7 +415,7 @@ export default function Home({ bannerHeight}) {
 
       .text-search-mode-select {
         padding: 5px 5px;
-        font-size: 10px;
+        font-size: 11px;
         border-radius: 5px;
         border: 1px solid #D2232A;
         background-color: #D2232A;
