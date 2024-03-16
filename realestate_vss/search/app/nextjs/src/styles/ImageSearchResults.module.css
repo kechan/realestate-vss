@@ -86,3 +86,34 @@
   color: #bbb;
   text-decoration: none;
 }
+
+.no-images {
+  font-size: 1.0rem;
+  color: gray;
+}
+
+/* remark section */
+.listing-remarks {
+  /* Add spacing above the remarks to separate it from the images */
+  margin-top: 1rem;
+  margin-left: 90px;
+  
+  /* Ensure the width matches the image container or is full width */
+  width: 100%;
+  
+  /* Style the font for better readability */
+  font-size: 1.0rem;
+  line-height: 1.4;
+  color: #333; /* Or any color that suits your design */
+
+  /* If you want to have a padding around the text */
+  padding: 0.5rem;
+  
+  /* If you want to add a background color to the remarks section */
+  background-color: #f8f8f8; /* Light grey background, for example */
+
+  /* Add border or box-shadow if you want to distinguish the section */
+  /* border: 1px solid #eaeaea;  */
+  /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);  */
+  border-bottom: 5px solid #eeeeee;
+}

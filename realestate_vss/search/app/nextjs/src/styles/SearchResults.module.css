@@ -26,6 +26,7 @@
 
 .listing {
   display: flex;
+  flex-direction: column;
   justify-content: start;
   padding: 10px 0;
   border-bottom: 1px solid #eee;
@@ -41,4 +42,9 @@
   color: #D2232A; /* Your theme's red accent color */
   text-decoration: underline;
   cursor: pointer;
+}
+
+.listing-details {  /* used in ImageSearchResults.js such that Remark can be in its own container */
+  display: flex;
+  flex-direction: row;
 }
