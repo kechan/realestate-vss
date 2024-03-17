@@ -34,18 +34,25 @@ class ListingSearchEngine:
     self.partition_by_province = partition_by_province
 
     if self.partition_by_province:
-      # partition by province
+      # text partition by province for df
       self.provStates = ['ON', 'BC', 'AB', 'SK', 'NS', 'NB', 'QC', 'NL', 'PE', 'MB', 'YT']
       self.text_embeddings_df_by_prov = {}
       for provState in self.provStates:
-        self.text_embeddings_df_by_prov[provState] = text_embeddings_df.q("provState == @provState").copy()
+        if len(text_embeddings_df.q("provState == @provState")) > 0:
+          self.text_embeddings_df_by_prov[provState] = text_embeddings_df.q("provState == @provState").copy()
+        else:
+          self.text_embeddings_df_by_prov[provState] = pd.DataFrame(columns=text_embeddings_df.columns)
 
-      # text, partition by province
+
+      # text, partition by province for index
       self.faiss_text_index = {}
       for provState in self.provStates:
         df = self.text_embeddings_df_by_prov[provState]
-        text_embeddings = np.stack(df.embedding.values)
-        self.faiss_text_index[provState] = self._build_faiss_index(text_embeddings)
+        if len(df) > 0:
+          text_embeddings = np.stack(df.embedding.values)
+          self.faiss_text_index[provState] = self._build_faiss_index(text_embeddings)
+        else:
+          self.faiss_text_index[provState] = None  # no faiss index for this province, this None may cause err elsewhere, debug later
     else:
       # text, no partition
       text_embeddings = np.stack(text_embeddings_df.embedding.values)

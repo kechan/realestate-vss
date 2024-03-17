@@ -21,9 +21,11 @@ from PIL import Image
 from dotenv import load_dotenv, find_dotenv
 
 from google.cloud import storage
+from google.auth.exceptions import DefaultCredentialsError
 
 app = FastAPI()
 # uvicorn main:app --reload &  # run this in terminal to start the server
+# uvicorn main:app --host 0.0.0.0 --port 8002 --reload  (demo on GCP)
 
 # Set up CORS middleware configuration
 _ = load_dotenv(find_dotenv())
@@ -55,8 +57,15 @@ pretrained = 'laion2b_s32b_b82k'
 if "GCS_PROJECT_ID" in os.environ and "GCS_BUCKET_NAME" in os.environ:
   GCS_PROJECT_ID = os.getenv("GCS_PROJECT_ID")
   GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-  storage_client = storage.Client(project=GCS_PROJECT_ID)
-  bucket = storage_client.bucket(GCS_BUCKET_NAME)
+  try:
+    storage_client = storage.Client(project=GCS_PROJECT_ID)
+    bucket = storage_client.bucket(GCS_BUCKET_NAME)
+  except DefaultCredentialsError as e:
+    print(f'Error connecting to GCS: {e}')
+    bucket = None
+  except Exception as e:
+    print(f'Error connecting to GCS: {e}')
+    bucket = None
 else:
   bucket = None
 
