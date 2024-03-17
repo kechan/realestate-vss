@@ -111,7 +111,7 @@ async def load_texts_dataframe():
     text_embeddings_df = await loop.run_in_executor(
       pool,
       join_df,
-      listing_df, text_embeddings_df, 'jumpId', 'listing_id', 'inner'
+      listing_df, text_embeddings_df, 'jumpId', 'listing_id', '_y', 'inner'
     )
 
   return text_embeddings_df

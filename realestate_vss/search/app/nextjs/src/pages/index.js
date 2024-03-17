@@ -10,6 +10,7 @@ import TextSearchResults from './TextSearchResults';
 
 import { ClearCacheButton } from './Banner';
 
+// npm run dev -- -p 8003
 
 export default function Home({ bannerHeight}) {
   const [selectedFile, setSelectedFile] = useState(null);
