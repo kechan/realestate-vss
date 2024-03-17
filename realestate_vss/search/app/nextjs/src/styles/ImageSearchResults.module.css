@@ -32,7 +32,7 @@
   object-fit: cover;
 }
 
-/* Modal popup */
+/* Image Modal popup */
 
 .modal {
   position: fixed;
@@ -116,4 +116,24 @@
   /* border: 1px solid #eaeaea;  */
   /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);  */
   border-bottom: 5px solid #eeeeee;
+}
+
+/* Remark modal popup */
+.modalWrapper {
+  max-width: 80%; /* Set the maximum width to 80% of the parent element */
+  margin: auto; /* Center the modal if it's less than the maximum width */
+  background-color: #fff; /* Set the background color to white */
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); /* Add a subtle shadow around the modal */
+  border-radius: 8px; /* Optional: Add some rounding to the corners of the modal */
+}
+
+.modalRemarks {
+  color: #000; /* Set the font color to black */
+  background-color: #fff; /* Set the background color to white */
+  padding: 0.5rem; /* Add some padding around the text */
+  font-size: 1.1rem; /* Set the font size */
+  line-height: 1.4; /* Set the line height */
+  max-width: 100%;
+  margin: auto;
+  overflow-wrap: break-word;
 }
