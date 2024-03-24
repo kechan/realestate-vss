@@ -9,8 +9,11 @@ from realestate_vss.search.engine import ListingSearchEngine, SearchMode
 import realestate_core.common.class_extensions
 from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
+from realestate_vss.data.index import FaissIndex
 
 from concurrent.futures import ThreadPoolExecutor
+
+import httpx
 import asyncio, io, json, os
 import torch
 from pathlib import Path
@@ -69,6 +72,16 @@ if "GCS_PROJECT_ID" in os.environ and "GCS_BUCKET_NAME" in os.environ:
 else:
   bucket = None
 
+# check if FAISS index folder is defined, if so, use FAISS index to later instantiate search engine
+# and not use the dataframes
+if "FAISS_INDEX_FOLDER" in os.environ:
+  faiss_index_folder = Path(os.getenv("FAISS_INDEX_FOLDER"))
+  if not faiss_index_folder.is_dir():
+    raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
+  print(f'Using FAISS index from {faiss_index_folder}')
+else:
+  faiss_index_folder = None
+  print('Not using FAISS index')
 
 async def load_images_dataframe():
   loop = asyncio.get_event_loop()
@@ -103,11 +116,6 @@ async def load_texts_dataframe():
       local_project_home / 'avm_listing_info' / 'listing_df'
     )
 
-    # text_embeddings = await loop.run_in_executor(
-    #   pool,
-    #   lambda: np.stack(text_embeddings_df.embedding.values)
-    # )
-
     text_embeddings_df = await loop.run_in_executor(
       pool,
       join_df,
@@ -115,6 +123,49 @@ async def load_texts_dataframe():
     )
 
   return text_embeddings_df
+
+async def load_faiss_indexes():
+  loop = asyncio.get_event_loop()
+  with ThreadPoolExecutor() as pool:
+    faiss_image_index = await loop.run_in_executor(
+      pool,
+      FaissIndex,
+      None,
+      None,
+      None,
+      faiss_index_folder / 'faiss_image_index'
+    )
+
+    faiss_text_index = await loop.run_in_executor(
+      pool,
+      FaissIndex,
+      None,
+      None,
+      None,
+      faiss_index_folder / 'faiss_text_index'
+    )
+
+  return faiss_image_index, faiss_text_index
+
+async def load_listing_df():
+  loop = asyncio.get_event_loop()
+  if faiss_index_folder is None:
+    with ThreadPoolExecutor() as pool:
+      listing_df = await loop.run_in_executor(
+        pool,
+        pd.read_feather,
+        local_project_home / 'avm_listing_info' / 'listing_df'
+      )
+  else:
+    with ThreadPoolExecutor() as pool:
+      listing_df = await loop.run_in_executor(
+        pool,
+        pd.read_feather,
+        faiss_index_folder / 'listing_df'
+      )
+
+
+  return listing_df
 
 @app.on_event("startup")
 async def startup_event():
@@ -124,20 +175,33 @@ async def startup_event():
   image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
   text_embedder = OpenClipTextEmbeddingModel(embedding_model=image_embedder)
 
-  # Async retrieval of embeddings
-  image_embeddings_df = await load_images_dataframe()
-  text_embeddings_df = await load_texts_dataframe()
+  if faiss_index_folder is None:
+    # Async retrieval of embeddings
+    image_embeddings_df = await load_images_dataframe()
+    text_embeddings_df = await load_texts_dataframe()
+    listing_df = await load_listing_df()
 
-  if 'listing_id' not in image_embeddings_df.columns:    
-    image_embeddings_df['listing_id'] = image_embeddings_df.image_name.apply(get_listingId_from_image_name)
+    if 'listing_id' not in image_embeddings_df.columns:    
+      image_embeddings_df['listing_id'] = image_embeddings_df.image_name.apply(get_listingId_from_image_name)
 
-  search_engine = ListingSearchEngine(
-        image_embeddings_df=image_embeddings_df, 
-        text_embeddings_df=text_embeddings_df, 
-        image_embedder=image_embedder, 
-        text_embedder=text_embedder,
-        partition_by_province=False
-        )
+    search_engine = ListingSearchEngine(
+          image_embeddings_df=image_embeddings_df, 
+          text_embeddings_df=text_embeddings_df, 
+          image_embedder=image_embedder, 
+          text_embedder=text_embedder,
+          partition_by_province=False
+          )
+  else:
+    faiss_image_index, faiss_text_index = await load_faiss_indexes()
+    listing_df = await load_listing_df()
+    search_engine = ListingSearchEngine(
+          image_embedder=image_embedder, 
+          text_embedder=text_embedder,
+          partition_by_province=False,
+          faiss_image_index=faiss_image_index, 
+          faiss_text_index=faiss_text_index, 
+          listing_df=listing_df
+          )
 
 class ListingData(BaseModel):
   jumpId: str
@@ -168,6 +232,7 @@ class ListingData(BaseModel):
   ac: bool
   remarks: Optional[str] = None
   listing_id: str
+  photo: Optional[str] = None
 
 class PartialListingData(BaseModel):
   jumpId: str
@@ -238,42 +303,47 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
       return f'error: Invalid image file'
 
     try:
-      image_names, scores = search_engine.image_search(image, topk=50)
+      # image_names, scores = search_engine.image_search(image, topk=50)
+      listings = search_engine.image_search(image, topk=50, group_by_listingId=True)
     except Exception as e:
       return f'search engine error: {e}'
-
-    # listingIds = [get_listingId_from_image_name(image_name) for image_name in image_names]
-    # image names are of format {listingId}_{imageId}.jpg, we want to organize by listingId
-    # such that we get a dict whose keys are listing_ids and values are list of image names
-    # and another dict whose keys are listing_ids and values are list of corresponding scores
-
-    listings = search_engine._gen_listings_from_image_search(image_names, scores)
-
-    # Sort the listings by average score in descending order
-    listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
 
     return listings
 
 @app.get("/images/{listingId}/{image_name}")
 async def get_image(listingId: str, image_name: str) -> FileResponse:
   image_path = local_project_home / 'deployment_listing_images' / listingId / image_name
-  # if not image_path.is_file():
-  #     raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
   if image_path.is_file():
     # serve from local directory
     return FileResponse(image_path)
-  else:
-    # serve from GCS
+  elif bucket is not None:           # check and serve from GCS (if available)    
     blob = bucket.blob(f"VSS/{listingId}/{image_name}")
-    if not blob.exists():
-      raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
+    if blob.exists():
+      # raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
     
-    def generate_image():
-      yield blob.download_as_bytes()
+      def generate_image():
+        yield blob.download_as_bytes()
 
-    content_type = 'image/jpeg'
+      content_type = 'image/jpeg'
 
-    return StreamingResponse(generate_image(), media_type=content_type)
+      return StreamingResponse(generate_image(), media_type=content_type)
+    
+  # If the image is not found locally or in the GCS bucket, try fetching from the jumptools URL
+  try:
+    # use _lg.jpg for lower resolution 
+    image_name_wo_ext = Path(image_name).stem
+    ext = Path(image_name).suffix
+    image_name = f'{image_name_wo_ext}_lg{ext}'
+
+    photo_url = 'https:' + str(Path(search_engine.get_listing(listingId)['photo']).parent) + '/' + image_name
+
+    async with httpx.AsyncClient() as client:
+      response = await client.get(photo_url)
+      response.raise_for_status()
+      return StreamingResponse(io.BytesIO(response.content), media_type='image/jpeg')
+  except Exception as e:
+    raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
+
 
 @app.post("/search-by-text/")
 async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[List[Optional[int]]]]], 
@@ -289,7 +359,7 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
   provState = query.get('provState', None)
   
   print(f'query: {query}')
-  if provState is None:
+  if provState is None and (mode == SearchMode.VSS_RERANK_ONLY or mode == SearchMode.SOFT_MATCH_AND_VSS):
     raise HTTPException(status_code=404, detail="provState must be provided")
 
   if mode == SearchMode.VSS_ONLY or mode == SearchMode.VSS_RERANK_ONLY:
@@ -304,14 +374,10 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
 @app.post("/text-to-image-search/")
 async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str]]]]:
   try:
-    image_names, scores = search_engine.text_2_image_search(phrase=query['phrase'], topk=50)
+    # image_names, scores = search_engine.text_2_image_search(phrase=query['phrase'], topk=50)
+    listings = search_engine.text_2_image_search(phrase=query['phrase'], topk=50, group_by_listingId=True)
   except Exception as e:
     return f'search engine error: {e}'
-
-  listings = search_engine._gen_listings_from_image_search(image_names, scores)
-
-  # Sort the listings by average score in descending order
-  listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
 
   return listings
 
@@ -323,6 +389,25 @@ async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Uni
     return f'search engine error: {e}'
   
   return listings
+
+
+@app.post("/image_to_text_search")
+async def image_2_text_search(file: UploadFile = File(...)):
+  image_data = await file.read()
+
+  try:
+    image = Image.open(io.BytesIO(image_data))
+  except Exception as e:
+    return f'error: Invalid image file'
+
+  try:
+    listings = search_engine.image_2_text_search(image, topk=50)
+    print(f'len(listings): {len(listings)}')
+  except Exception as e:
+    return f'search engine error: {e}'
+
+  return listings
+
 
 
 # for testing before UI is built

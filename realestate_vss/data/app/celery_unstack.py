@@ -33,21 +33,12 @@ def unstack(
   # The file has already been saved, so we just need to handle the metadata here
   listing_folder = Path(listing_folder)
 
-  # Metadata handling and saving to pickle
-
+  # process metadata: image_ids and aspect_ratios
   image_ids = comma_sep_image_id.split(',') if comma_sep_image_id else []
-  # save_to_pickle(image_ids, listing_folder / 'image_ids.pickle')
-    
-  # photo_ids = comma_sep_photo_id.split(',') if comma_sep_photo_id else []
-  # save_to_pickle(photo_ids, listing_folder / 'photo_ids.pickle')
 
   aspect_ratios = comma_sep_aspect_ratio.split(',') if comma_sep_aspect_ratio else []
   save_to_pickle(aspect_ratios, listing_folder / 'aspect_ratios.pickle')
 
-  if remarks:
-    save_to_pickle(remarks, listing_folder / 'remarks.pickle')
-
-  # unstack(listing_folder=listing_folder)
   def unstack_images(filename, n_images):
     with Image.open(filename) as img:
       width, height = img.size

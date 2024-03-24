@@ -11,23 +11,52 @@ from PIL import Image, ImageDraw, ImageFont
 from realestate_core.common.utils import save_to_pickle, load_from_pickle, load_from_pickle, join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 
+from ..data.index import FaissIndex
+
 class SearchMode(str, Enum):
   VSS_RERANK_ONLY = "VSS_RERANK_ONLY"
   VSS_ONLY = "VSS_ONLY"
   SOFT_MATCH_AND_VSS = "SOFT_MATCH_AND_VSS"
 
 class ListingSearchEngine:
-  def __init__(self, image_embeddings_df, text_embeddings_df, image_embedder, text_embedder, partition_by_province=True):
+  def __init__(self, 
+               image_embedder, 
+               text_embedder, 
+               image_embeddings_df=None, 
+               text_embeddings_df=None, 
+               partition_by_province=True,
+               faiss_image_index: FaissIndex = None,
+               faiss_text_index: FaissIndex = None,
+               listing_df: pd.DataFrame = None   # carries detail info about listings
+               ):
     '''
     image_embeddings_df: pd.DataFrame with columns ['listing_id', 'image_name', 'embedding']
     text_embeddings_df: pd.DataFrame with columns jumpId, embedding, and structured data attributes
     '''
 
-    self.image_embeddings_df = image_embeddings_df
-    # self.images = image_embeddings_df.image_name.values.tolist()
-    image_embeddings = np.stack(image_embeddings_df.embedding.values)
+    # params consistency check, this may change later
+    if (faiss_image_index is not None or faiss_text_index is not None) and partition_by_province:
+      raise ValueError('realestate_vss.data.index.FaissIndex does not support partition_by_province at the moment')
+    
+    # if image FAISS index is provided, ensure text FAISS index is also provided, and vice 
+    if (faiss_image_index is not None and faiss_text_index is None) or (faiss_text_index is not None and faiss_image_index is None):
+      raise ValueError('Both faiss_image_index and faiss_text_index must be provided if one is provided')
+    
+    # ensure if we provide FAISS indexes, then 
+    # 1. DO NOT provide image_embeddings_df and text_embeddings_df, to avoid confusion
+    # 2. DO provide listing_df, which carries detail info about listings
+    if faiss_image_index is not None and faiss_text_index is not None:
+      if image_embeddings_df is not None or text_embeddings_df is not None:
+        raise ValueError('If FAISS indexes are provided, image_embeddings_df and text_embeddings_df must NOT be provided')
+      if listing_df is None:
+        raise ValueError('If FAISS indexes are provided, listing_df must be provided, to ensure compatibility')
 
-    self.text_embeddings_df = text_embeddings_df
+    if image_embeddings_df is not None:
+      self.image_embeddings_df = image_embeddings_df
+      image_embeddings = np.stack(image_embeddings_df.embedding.values)
+
+      self.text_embeddings_df = text_embeddings_df
+
     self.image_embedder = image_embedder
     self.text_embedder = text_embedder
 
@@ -54,28 +83,46 @@ class ListingSearchEngine:
         else:
           self.faiss_text_index[provState] = None  # no faiss index for this province, this None may cause err elsewhere, debug later
     else:
-      # text, no partition
-      text_embeddings = np.stack(text_embeddings_df.embedding.values)
-      self.faiss_text_index = self._build_faiss_index(text_embeddings)
+      # For text, no partition
+      if faiss_text_index is not None:
+        assert isinstance(faiss_text_index, FaissIndex), 'faiss_text_index must be an instance of realestate_vss.data.index.FaissIndex'
+        self.faiss_text_index = faiss_text_index
+      else:
+        text_embeddings = np.stack(text_embeddings_df.embedding.values)
+        self.faiss_text_index = self._build_faiss_index(text_embeddings)
 
     # use FAISS to construct index and VSS query
-    # image
-    self.faiss_image_index = self._build_faiss_index(image_embeddings)
+    # For image
+    if faiss_image_index is not None:
+      assert isinstance(faiss_image_index, FaissIndex), 'faiss_image_index must be an instance of realestate_vss.data.index.FaissIndex'
+      self.faiss_image_index = faiss_image_index
+    else:
+      self.faiss_image_index = self._build_faiss_index(image_embeddings)
+
+    self.listing_df = listing_df
 
 
   def get_listing(self, listingId: str) -> Dict[str, Any]:
     """
     Get the listing data for a given listingId
     """
-    listing = self.text_embeddings_df.q("jumpId == @listingId")
-    if len(listing) == 0:   # search the image set
-      listing = self.image_embeddings_df.q("listing_id == @listingId")
+
+    if isinstance(self.faiss_text_index, FaissIndex):
+      listing = self.listing_df.q("jumpId == @listingId").copy()
       if len(listing) == 0:
         return {}
+      listing['listing_id'] = listing['jumpId']
+    else:
+      listing = self.text_embeddings_df.q("jumpId == @listingId")
+      if len(listing) == 0:   # search the image set
+        listing = self.image_embeddings_df.q("listing_id == @listingId")
+        if len(listing) == 0:
+          return {}
     
     listing_data = listing.to_dict('records')[0]
 
-    listing_data.pop('embedding') 
+    if 'embedding' in listing_data:
+      listing_data.pop('embedding')
 
     if 'propertyFeatures' in listing_data:
       listing_data['propertyFeatures'] = listing_data['propertyFeatures'].tolist()
@@ -83,7 +130,10 @@ class ListingSearchEngine:
     return listing_data
 
   def get_imagenames(self, listingId: str) -> List[str]:
-    return self.image_embeddings_df.q("listing_id == @listingId").image_name.values.tolist()
+    if isinstance(self.faiss_image_index, FaissIndex):
+      return self.faiss_image_index.aux_info.q("listing_id == @listingId").image_name.values.tolist()
+    else:
+      return self.image_embeddings_df.q("listing_id == @listingId").image_name.values.tolist()
 
   def text_search(self, mode: SearchMode, topk=50, return_df=True, lambda_val=None, alpha_val=None, **query) -> Union[pd.DataFrame, List[Dict]]:    
     '''
@@ -113,18 +163,22 @@ class ListingSearchEngine:
 
     def vss_search(phrase, topk=50) -> Tuple[List[str], List[float]]:
       text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)
-      if self.partition_by_province:
-        scores, top_k_indices = self._query_faiss_index(self.faiss_text_index[provState], text_features, topk=topk)
+      if isinstance(self.faiss_text_index, FaissIndex):
+        scores, top_listingIds = self._query_faiss_index(self.faiss_text_index, text_features, topk=topk)
+        return top_listingIds, scores
       else:
-        scores, top_k_indices = self._query_faiss_index(self.faiss_text_index, text_features, topk=topk)
+        if self.partition_by_province:
+          scores, top_k_indices = self._query_faiss_index(self.faiss_text_index[provState], text_features, topk=topk)
+        else:
+          scores, top_k_indices = self._query_faiss_index(self.faiss_text_index, text_features, topk=topk)
 
-      top_k_indices = top_k_indices[0, :]
-      if self.partition_by_province:
-        top_listingIds = self.text_embeddings_df_by_prov[provState].iloc[top_k_indices].jumpId.values.tolist()
-      else:
-        top_listingIds = self.text_embeddings_df.iloc[top_k_indices].jumpId.values.tolist()
+        top_k_indices = top_k_indices[0, :]
+        if self.partition_by_province:
+          top_listingIds = self.text_embeddings_df_by_prov[provState].iloc[top_k_indices].jumpId.values.tolist()
+        else:
+          top_listingIds = self.text_embeddings_df.iloc[top_k_indices].jumpId.values.tolist()
 
-      return top_listingIds, scores[0].tolist()
+        return top_listingIds, scores[0].tolist()
 
     # provState = query['provState']
     phrase = query.get('phrase')
@@ -193,22 +247,41 @@ class ListingSearchEngine:
     else:
       raise ValueError(f'Unknown search mode {mode}')
 
-    if self.partition_by_province:
+    if isinstance(self.faiss_text_index, FaissIndex):
+      result_df = pd.DataFrame({'listing_id': matched_listingIds, 'score': scores})
+      # the new text FaissIndex is such that stuff they index can be remark chunks, so listing_id is not unique
+      # we will need to group by listing_id and take the avg score 
+      result_df = result_df.groupby('listing_id').score.mean().reset_index()
+
       result_df = join_df(
-          pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
-          self.text_embeddings_df_by_prov[provState], 
-          left_on='jumpId', how='inner')
+          result_df, 
+          self.listing_df, 
+          left_on='listing_id', right_on='jumpId', how='inner')
+      
+      # sort by score in descending order
+      result_df.sort_values(by='score', ascending=False, inplace=True)
+
     else:
-      result_df = join_df(
-          pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
-          self.text_embeddings_df, 
-          left_on='jumpId', how='inner')
+      if self.partition_by_province:
+        result_df = join_df(
+            pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
+            self.text_embeddings_df_by_prov[provState], 
+            left_on='jumpId', how='inner')
+      else:
+        result_df = join_df(
+            pd.DataFrame({'jumpId': matched_listingIds, 'score': scores}), 
+            self.text_embeddings_df, 
+            left_on='jumpId', how='inner')
     
     if return_df:
       return result_df
     else:
       # remove listing_id and embedding columns from results_df before returning the List[Dict]
-      result_df = result_df.drop(columns=['jumpId', 'embedding'])
+      if 'jumpId' in result_df.columns:
+        result_df = result_df.drop(columns=['jumpId'])
+      if 'embedding' in result_df.columns:
+        result_df = result_df.drop(columns=['embedding'])
+
       result_dict = result_df.to_dict('records')
       # Convert all values to strings
       for item in result_dict:
@@ -218,7 +291,7 @@ class ListingSearchEngine:
 
       return result_dict
 
-  def image_search(self, image: Image, topk=5) -> Tuple[List[str], List[float]]:
+  def image_search(self, image: Image, topk=5, group_by_listingId=False) -> Tuple[List[str], List[float]]:
     '''
     Use FAISS to search for similar images
 
@@ -227,26 +300,49 @@ class ListingSearchEngine:
 
     return: top image names and scores
     '''
+    
     image_features = self.image_embedder.embed_from_single_image(image)
+    if isinstance(self.faiss_image_index, FaissIndex):
+      scores, top_image_names = self._query_faiss_index(self.faiss_image_index, image_features, topk=topk)
+      if group_by_listingId:
+        listings = self._gen_listings_from_image_search(top_image_names, scores)
+        # Sort the listings by average score in descending order
+        listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
+        return listings
 
-    scores, top_k_indices = self._query_faiss_index(self.faiss_image_index, image_features, topk=topk)
+      return top_image_names, scores
+    else:
+      scores, top_k_indices = self._query_faiss_index(self.faiss_image_index, image_features, topk=topk)
 
-    top_k_indices = top_k_indices[0, :]
-    top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
+      top_k_indices = top_k_indices[0, :]
+      top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
 
-    return top_image_names, scores[0].tolist() #, image_features, top_k_indices
+      if group_by_listingId:
+        raise NotImplementedError('group_by_listingId is not yet implemented for non-FaissIndex image index')
+
+      return top_image_names, scores[0].tolist() #, image_features, top_k_indices
   
-  def text_2_image_search(self, phrase: str, topk=5) -> Tuple[List[str], List[float]]:
+  def text_2_image_search(self, phrase: str, topk=5, group_by_listingId=False) -> Tuple[List[str], List[float]]:
     """
     Given a phrase, use VSS to search for images that match it conceptually.
     """
     query_embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)
 
-    scores, top_k_indices = self._query_faiss_index(self.faiss_image_index, query_embedding, topk=topk)
-    top_k_indices = top_k_indices[0, :]
-    top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
-
-    return top_image_names, scores[0].tolist()
+    if isinstance(self.faiss_image_index, FaissIndex):
+      scores, top_image_names = self._query_faiss_index(self.faiss_image_index, query_embedding, topk=topk)
+      if group_by_listingId:
+        listings = self._gen_listings_from_image_search(top_image_names, scores)
+        # Sort the listings by average score in descending order
+        listings = sorted(listings, key=lambda x: x['avg_score'], reverse=True)
+        return listings
+      return top_image_names, scores
+    else:
+      scores, top_k_indices = self._query_faiss_index(self.faiss_image_index, query_embedding, topk=topk)
+      top_k_indices = top_k_indices[0, :]
+      top_image_names = self.image_embeddings_df.iloc[top_k_indices].image_name.values.tolist()
+      if group_by_listingId:
+        raise NotImplementedError('group_by_listingId is not yet implemented for non-FaissIndex image index')
+      return top_image_names, scores[0].tolist()
   
   def text_2_image_text_search(self, phrase: str, topk=5) -> List[Dict[str, Union[str, float , List[str], str]]]:
     """
@@ -262,7 +358,7 @@ class ListingSearchEngine:
 
     listings_from_image_search = self._gen_listings_from_image_search(top_image_names, top_scores)
 
-    # add in remarks wherever available
+    # add in remarks wherever available for the listings from image search
     for listing in listings_from_image_search:
       listingId = listing['listingId']
       listing_info = self.get_listing(listingId)
@@ -315,6 +411,45 @@ class ListingSearchEngine:
 
     return combined_results
 
+  def image_2_text_search(self, image: Image, topk=5, return_df=False):
+    image_embedding = self.image_embedder.embed_from_single_image(image)
+    if isinstance(self.faiss_text_index, FaissIndex):
+      scores, top_listingIds = self._query_faiss_index(self.faiss_text_index, image_embedding, topk=topk)
+    else:
+      raise NotImplementedError('image_2_text_search is not implemented for non-FaissIndex text index')
+    
+    if isinstance(self.faiss_text_index, FaissIndex):
+      result_df = pd.DataFrame({'listing_id': top_listingIds, 'score': scores})
+      # the new text FaissIndex is such that stuff they index can be remark chunks, so listing_id is not unique
+      # we will need to group by listing_id and take the avg score 
+      result_df = result_df.groupby('listing_id').score.mean().reset_index()
+
+      # join with listing_df to get details
+      result_df = join_df(
+          result_df, 
+          self.listing_df, 
+          left_on='listing_id', right_on='jumpId', how='inner')
+      
+      # sort by score in descending order
+      result_df.sort_values(by='score', ascending=False, inplace=True)
+
+    if return_df:
+      return result_df
+    else:
+      # remove listing_id and embedding columns from results_df before returning the List[Dict]
+      if 'jumpId' in result_df.columns:
+        result_df = result_df.drop(columns=['jumpId'])
+      if 'embedding' in result_df.columns:
+        result_df = result_df.drop(columns=['embedding'])
+
+      result_dict = result_df.to_dict('records')
+      # Convert all values to strings
+      for item in result_dict:
+        for key, value in item.items():
+          if key != 'score':
+            item[key] = str(value)
+
+      return result_dict
 
 
 
@@ -394,7 +529,7 @@ class ListingSearchEngine:
     # Initialize a FAISS index
     # Here we use the L2 distance metric; FAISS also supports inner product (dot product) with faiss.METRIC_INNER_PRODUCT
     # index = faiss.IndexFlatL2(embeddings.shape[1])
-    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index = faiss.IndexFlatIP(embeddings.shape[1])   # use dot product
 
     # Add vectors to the index
     index.add(embeddings)
@@ -408,15 +543,23 @@ class ListingSearchEngine:
     if query_vectors.shape[1] == 1 or len(query_vectors.shape) == 1:
       query_vectors = query_vectors.reshape(1, -1)
 
-    # Perform the search
-    similarity_scores, I = index.search(query_vectors, topk)
-    
-    return similarity_scores, I
+    # Perform the search (depends on if index is realestate_vss.data.index.FaissIndex or faiss.IndexFlat**)
+    if isinstance(index, FaissIndex):
+      top_matches, similarity_scores = index.search(query_vectors=query_vectors, topK=topk)
+      return similarity_scores, top_matches   # top_matches are either image_names or listing_ids depending on the index
+    else:
+      similarity_scores, I = index.search(query_vectors, topk)
+      return similarity_scores, I
 
 
   def _gen_listings_from_image_search(self, image_names: List[str], scores: List[float]) -> List[Dict[str, Union[str, float, List[str]]]]:
     """
     Given a list of image names and their scores, generate a list of listings with the average score and image names for that listing
+
+    # listingIds = [get_listingId_from_image_name(image_name) for image_name in image_names]
+    # image names are of format {listingId}_{imageId}.jpg, we want to organize by listingId
+    # such that we get a dict whose keys are listing_ids and values are list of image names
+    # and another dict whose keys are listing_ids and values are list of corresponding scores
     """
     listingId_to_image_names = {}
     listingId_to_scores = {}

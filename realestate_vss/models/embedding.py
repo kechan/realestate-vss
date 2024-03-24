@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import pandas as pd
 from PIL import Image
 
+import spacy
+
 from tqdm.auto import tqdm
 
 from ..data.preprocess import read_and_preprocess_image
@@ -87,25 +89,62 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
     super().__init__(model_name=model_name, pretrained=pretrained, embedding_model=embedding_model, device=device)
     self.tokenizer = open_clip.get_tokenizer(self.model_name)
 
-  def embed(self, df: pd.DataFrame, batch_size=128, return_df=True) -> pd.DataFrame:
+  def embed(self, df: pd.DataFrame, batch_size=128, return_df=True, tokenize_sentences=False) -> pd.DataFrame:
     assert 'jumpId' in df.columns, 'df must have jumpId columns'
     assert 'remarks' in df.columns, 'df must have remarks columns'
+    if tokenize_sentences:
+      nlp = spacy.load('en_core_web_sm')
 
-    jumpIds, text_embeddings = [], []
+    jumpIds, text_embeddings, remark_chunk_ids = [], [], []
+
+    # Initialize lists to store the sentences, jumpIds, and chunk_ids for each batch
+    sentence_batch, jumpId_batch, chunk_id_batch = [], [], []
+
     for i in tqdm(range(0, len(df), batch_size), desc='Processing remarks'):
       _jumpIds = df.iloc[i: i + batch_size].jumpId.values
       batch_remarks = df.iloc[i: i + batch_size].remarks.values
 
       with torch.no_grad():
-        text_features = self.model.encode_text(self.tokenizer(batch_remarks).to(self.device), normalize=True).cpu().numpy()
+        if tokenize_sentences:
+          for idx, remark in enumerate(batch_remarks):
+            doc = nlp(remark)
+            for sent_idx, sent in enumerate(doc.sents):
 
-      jumpIds.extend(list(_jumpIds))
-      text_embeddings.extend(list(text_features))
+              sentence_batch.append(sent.text)
+              jumpId_batch.append(_jumpIds[idx])
+              chunk_id_batch.append(f"{_jumpIds[idx]}_{sent_idx}")
+
+              if len(sentence_batch) == batch_size:
+                text_features = self.model.encode_text(self.tokenizer(sentence_batch).to(self.device), normalize=True).cpu().numpy()
+                text_embeddings.extend(list(text_features))
+                jumpIds.extend(jumpId_batch)
+                remark_chunk_ids.extend(chunk_id_batch)
+
+                # Clear the sentence_batch, jumpId_batch, and chunk_id_batch lists for the next batch
+                sentence_batch, jumpId_batch, chunk_id_batch = [], [], []# clear the 
+
+          # Process any remaining sentences in the sentence_batch list
+          if sentence_batch:
+            text_features = self.model.encode_text(self.tokenizer(sentence_batch).to(self.device), normalize=True).cpu().numpy()
+            text_embeddings.extend(list(text_features))
+            jumpIds.extend(jumpId_batch)
+            remark_chunk_ids.extend(chunk_id_batch)
+
+        else:
+          text_features = self.model.encode_text(self.tokenizer(batch_remarks).to(self.device), normalize=True).cpu().numpy()
+          jumpIds.extend(list(_jumpIds))
+          text_embeddings.extend(list(text_features))
 
     if return_df:
-      return pd.DataFrame(data={'listing_id': jumpIds, 'embedding': text_embeddings})
+      if tokenize_sentences:
+        return pd.DataFrame(data={'listing_id': jumpIds, 'remark_chunk_id': remark_chunk_ids, 'embedding': text_embeddings})
+      else:
+        return pd.DataFrame(data={'listing_id': jumpIds, 'embedding': text_embeddings})
     else:
-      return jumpIds, text_embeddings
+      if tokenize_sentences:
+        return jumpIds, remark_chunk_ids, text_embeddings
+      else:
+        return jumpIds, text_embeddings
 
   def embed_from_texts(self, texts: List[str], batch_size=128):
 

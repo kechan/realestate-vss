@@ -9,6 +9,7 @@ from dotenv import load_dotenv, find_dotenv
 
 from celery_unstack import unstack
 from celery_embed import embed_images
+from celery_update_embeddings import update_embeddings
 
 # use this to establish a public endpt for image tagging service pipeline to upload image to
 # ./ngrok http 8000 
@@ -48,15 +49,6 @@ async def submit(
     file.file.seek(0)
     shutil.copyfileobj(file.file, buffer)
 
-  # Call celery task to save the pickles with metadata
-  # unstack.delay(
-  #   listing_folder=str(img_cache_folder/listingId),
-  #   comma_sep_image_id=comma_sep_image_id,
-  #   comma_sep_photo_id=comma_sep_photo_id,
-  #   comma_sep_aspect_ratio=comma_sep_aspect_ratio,
-  #   remarks=remarks
-  # )
-  # Inside the submit endpoint
   unstack.apply_async(args=[str(img_cache_folder/listingId), 
                             comma_sep_image_id, 
                             comma_sep_photo_id, 
@@ -76,6 +68,15 @@ async def embed():
   embed_images.apply_async(args=[str(img_cache_folder)], queue='embed_queue')
 
   return JSONResponse(content={"message": "Embedding images."})
+
+@app.get("/update_vec_index")
+async def update_vec_index():
+  """
+  Consolidate all embeddings in img_cache_folder and update the vector index for the search service.
+  """
+  update_embeddings.apply_async(args=[str(img_cache_folder)], queue='update_embed_queue')
+
+  return JSONResponse(content={"message": "Updating vector index."})
 
 
 # Run the server and reload on changes
