@@ -91,7 +91,7 @@ def update_embeddings(img_cache_folder: str):
 
   assert set(image_embeddings_df.listing_id) == set(text_embeddings_df.listing_id), 'listing_id in image_embeddings_df and text_embeddings_df must be the same'
 
-  if not (working_folder/'faise_image_index.index').exists() and not (working_folder/'faise_image_index.aux_info_df').exists():
+  if not (working_folder/'faiss_image_index.index').exists() and not (working_folder/'faiss_image_index.aux_info_df').exists():
     # create a new index for the first time
     image_aux_info = image_embeddings_df.drop(columns=['embedding'])
     faiss_image_index = FaissIndex(embeddings=np.stack(image_embeddings_df.embedding.values), 
@@ -105,8 +105,8 @@ def update_embeddings(img_cache_folder: str):
     
   else:
     # load the existing index
-    faiss_image_index = FaissIndex(filepath=working_folder/'faise_image_index')
-    faiss_text_index = FaissIndex(filepath=working_folder/'faise_text_index')
+    faiss_image_index = FaissIndex(filepath=working_folder/'faiss_image_index')
+    faiss_text_index = FaissIndex(filepath=working_folder/'faiss_text_index')
 
     # simple sanity check
     assert set(faiss_text_index.aux_info.listing_id.values) == set(faiss_image_index.aux_info.listing_id.values), 'listing_id in existing faiss_text_index and faiss_image_index must be the same'
@@ -165,8 +165,8 @@ def update_embeddings(img_cache_folder: str):
     faiss_text_index.update(embeddings=embeddings, aux_info=aux_info)
 
   # save the index to disk
-  faiss_image_index.save(working_folder/'faise_image_index')
-  faiss_text_index.save(working_folder/'faise_text_index')
+  faiss_image_index.save(working_folder/'faiss_image_index')
+  faiss_text_index.save(working_folder/'faiss_text_index')
 
   # add new listing_df to existing listing_df (we track the latest up2date listing info on disk)
   if (working_folder/'listing_df').exists():

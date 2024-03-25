@@ -451,6 +451,30 @@ class ListingSearchEngine:
 
       return result_dict
 
+  def image_2_image_text_search(self, image: Image, topk=5) -> List[Dict[str, Union[str, float , List[str], str]]]:
+    image_results = self.image_search(image, topk=topk, group_by_listingId=True)
+
+    text_results = self.image_2_text_search(image, topk=topk)
+    text_results = [{**x, 'listingId': x['listing_id']} for x in text_results]   # add the key listingId
+
+    # add in remarks whenever available for the image results
+    for listing in image_results:
+      listingId = listing['listingId']
+      listing_info = self.get_listing(listingId)
+      remarks = listing_info.get('remarks', '')
+      listing['remarks'] = remarks
+
+    # Normalize scores
+    image_results = self.normalize_scores(image_results, 'avg_score')
+    text_results = self.normalize_scores(text_results, 'score')
+
+    # merge results
+    combined_results = self.merge_results(text_results, image_results)
+
+    combined_results.sort(key=lambda x: x['avg_score'], reverse=True)
+
+    return combined_results
+
 
 
   def visualize_image_search_results(self, image_names: List[str], scores: List[float], photos_dir: Path = '.') -> Image:

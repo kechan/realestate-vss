@@ -391,7 +391,7 @@ async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Uni
   return listings
 
 
-@app.post("/image_to_text_search")
+@app.post("/image-to-text-search")
 async def image_2_text_search(file: UploadFile = File(...)):
   image_data = await file.read()
 
@@ -402,12 +402,26 @@ async def image_2_text_search(file: UploadFile = File(...)):
 
   try:
     listings = search_engine.image_2_text_search(image, topk=50)
-    print(f'len(listings): {len(listings)}')
   except Exception as e:
     return f'search engine error: {e}'
 
   return listings
 
+@app.post("/image-to-image-text-search")
+async def image_2_image_text_search(file: UploadFile = File(...)):
+  image_data = await file.read()
+
+  try:
+    image = Image.open(io.BytesIO(image_data))
+  except Exception as e:
+    return f'error: Invalid image file'
+
+  try:
+    listings = search_engine.image_2_image_text_search(image, topk=50)
+  except Exception as e:
+    return f'search engine error: {e}'
+
+  return listings
 
 
 # for testing before UI is built

@@ -21,14 +21,14 @@ export default function Home({ bannerHeight}) {
 
   const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
 
-  const [textSearchMode, setTextSearchMode] = useState('TEXT_TO_IMAGE_TEXT_VSS');
+  const [searchMode, setSearchMode] = useState('TEXT_TO_IMAGE_TEXT_VSS');
 
   // Load the search results from Local Storage when the component mounts
   useEffect(() => {
     // console.log('first effect')
     const savedSearchResults = localStorage.getItem('searchResults');
     const savedSearchTerm = localStorage.getItem('searchTerm');
-    const savedTextSearchMode = localStorage.getItem('textSearchMode');
+    const savedSearchMode = localStorage.getItem('searchMode');
 
     if (savedSearchResults) {
       const results = JSON.parse(savedSearchResults);
@@ -43,8 +43,8 @@ export default function Home({ bannerHeight}) {
       setSearchTerm(savedSearchTerm);
     }
 
-    if (savedTextSearchMode) {
-      setTextSearchMode(savedTextSearchMode);
+    if (savedSearchMode) {
+      setSearchMode(savedSearchMode);
     }
     
   }, []); // Empty dependency array ensures this runs once on client-side mount
@@ -128,7 +128,7 @@ export default function Home({ bannerHeight}) {
 
   // Function to handle calling search API 
   const handleSubmit = async (event) => {
-    console.log('search mode:', textSearchMode);
+    console.log('search mode:', searchMode);
     console.log('search term:', searchTerm); 
     event.preventDefault();
     // setSearchResults([]); // don't clear this here, otherwise the UX will flicker a lot
@@ -143,7 +143,7 @@ export default function Home({ bannerHeight}) {
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
     // console.log('apiURL:', apiURL);
 
-    if (selectedFile) {   // perform image (to image) search
+    if (selectedFile && (searchMode != 'IMAGE_TO_TEXT_VSS') && (searchMode != 'IMAGE_TO_IMAGE_TEXT_VSS')) {   // perform image (to image) search
       const formData = new FormData();
       formData.append('file', selectedFile);
 
@@ -162,7 +162,7 @@ export default function Home({ bannerHeight}) {
       return
     }
 
-    if (textSearchMode === 'VSS_ONLY') {
+    if (searchMode === 'VSS_ONLY') {
 
       if (searchTerm) {
         if (criteriaSearchFormData.provState == "" || criteriaSearchFormData.provState == null) {
@@ -198,7 +198,7 @@ export default function Home({ bannerHeight}) {
       return;
     }
 
-    if (textSearchMode === 'SOFT_MATCH_AND_VSS') {
+    if (searchMode === 'SOFT_MATCH_AND_VSS') {
       console.log('Performing soft match + VSS search');
       if (criteriaSearchFormData.provState == "") {
         alert('Please select a province.');
@@ -225,7 +225,7 @@ export default function Home({ bannerHeight}) {
       return
     }
 
-    if (textSearchMode === 'TEXT_TO_IMAGE_VSS') {
+    if (searchMode === 'TEXT_TO_IMAGE_VSS') {
       if (!searchTerm || searchTerm === "") {
         alert('Please enter a search term.');
         return;
@@ -252,7 +252,7 @@ export default function Home({ bannerHeight}) {
       return;
     }
 
-    if (textSearchMode === 'TEXT_TO_IMAGE_TEXT_VSS') {
+    if (searchMode === 'TEXT_TO_IMAGE_TEXT_VSS') {
       if (!searchTerm || searchTerm === "") {
         alert('Please enter a search term.');
         return;
@@ -279,8 +279,57 @@ export default function Home({ bannerHeight}) {
       return;
 
     }
+
+    if (searchMode === 'IMAGE_TO_TEXT_VSS') {
+      if (!selectedFile) {
+        alert('Please select an image to search.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      try {
+        const response = await fetch(`${apiURL}/image-to-text-search/`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+
+        data.searchType = 'text'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);
+      }
+      return
+    }
+
+    if (searchMode === 'IMAGE_TO_IMAGE_TEXT_VSS') {
+      if (!selectedFile) {
+        alert('Please select an image to search.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      try {
+        const response = await fetch(`${apiURL}/image-to-image-text-search/`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+
+        data.searchType = 'image'; // Add a property to the data object to indicate the search type
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);
+      }
+      return
+    }
+
     // we reach here if non of above conditions are met (this explicitly requires all above have a return)
-    alert(`Invalid search: selectedFile=${selectedFile}, selectedFileUrl=${selectedFileUrl} textSearchMode=${textSearchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
+    alert(`Invalid search: selectedFile=${selectedFile}, selectedFileUrl=${selectedFileUrl} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
 
     // TODO: if we get here, we should consider clear the previous search results and render an error
   };
@@ -309,12 +358,12 @@ export default function Home({ bannerHeight}) {
                 {/* <label for="text-search-mode-select">Mode:</label> */}
                 <select className="text-search-mode-select" 
                         style={{ color: '#FFFFFF' }} 
-                        value={textSearchMode} 
-                        // onChange={e => setTextSearchMode(e.target.value)}
+                        value={searchMode} 
+                        // onChange={e => setSearchMode(e.target.value)}
                         onChange={e => {
                           const newMode = e.target.value;
-                          setTextSearchMode(newMode); // Update state
-                          localStorage.setItem('textSearchMode', newMode); // Save to localStorage
+                          setSearchMode(newMode); // Update state
+                          localStorage.setItem('searchMode', newMode); // Save to localStorage
                           console.log('Text search mode updated to:', newMode); // Optional: for debugging
                         }}
                 >
@@ -322,6 +371,8 @@ export default function Home({ bannerHeight}) {
                   <option value="SOFT_MATCH_AND_VSS">🔍📃 by Remarks and Criteria</option>
                   <option value="TEXT_TO_IMAGE_VSS">📝 &rarr; 🖼️ Text to Image</option>
                   <option value="TEXT_TO_IMAGE_TEXT_VSS">📝 &rarr; 🖼️+📝 Text to Image&Remarks</option>
+                  <option value="IMAGE_TO_TEXT_VSS">🖼️ &rarr; 📝 Image to Remarks</option>
+                  <option value="IMAGE_TO_IMAGE_TEXT_VSS">🖼️ &rarr; 🖼️+📝 Image to Image & Remarks</option>
                 </select>
 
               </div>
@@ -335,7 +386,7 @@ export default function Home({ bannerHeight}) {
         <CriteriaSearchForm
             setSearchCriteria={setCriteriaSearchFormData}
             onFormChange={handleCriteriaFormChange}
-            searchMode={textSearchMode}
+            searchMode={searchMode}
           />
       </div>
 
