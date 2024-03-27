@@ -69,9 +69,23 @@
   display: none;
 }
 
+.thumbnailContainer {
+  position: relative;
+}
+
 .thumbnail {
   max-width: 350px;
   max-height: 350px;
   object-fit: contain;
   margin: 10px;
+}
+
+.removeButton {
+  font-family: Arial, sans-serif;
+  font-size: 0.9em; 
+  color: #D2232A;
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  /* background-color: #fff; */
 }

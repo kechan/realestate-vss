@@ -13,8 +13,11 @@ import { ClearCacheButton } from './Banner';
 // npm run dev -- -p 8003
 
 export default function Home({ bannerHeight}) {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [selectedFileUrl, setSelectedFileUrl] = useState(null);
+  // const [selectedFile, setSelectedFile] = useState(null);
+  // const [selectedFileUrl, setSelectedFileUrl] = useState(null);
+
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [selectedFileUrls, setSelectedFileUrls] = useState([]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -65,11 +68,13 @@ export default function Home({ bannerHeight}) {
   // }, [textSearchMode]);
 
 
-  const handleFileChange = (file) => {
-    setSelectedFile(file);
+  const handleFileChange = (files) => {
+    // setSelectedFile(file);
+    setSelectedFiles(files);
     // Clear the searchTerm when a file is selected for upload
     if (searchTerm) setSearchTerm('');
-    setSelectedFileUrl(file ? URL.createObjectURL(file) : null);
+    // setSelectedFileUrl(file ? URL.createObjectURL(file) : null);
+    setSelectedFileUrls(files.map(file => URL.createObjectURL(file)));
 
     // Clear the criteria search
     if (!isFormDataEmpty(criteriaSearchFormData)) {
@@ -81,9 +86,9 @@ export default function Home({ bannerHeight}) {
     setSearchTerm(newSearchTerm);
     localStorage.setItem('searchTerm', newSearchTerm);   // persists to work for browser back button
     // Clear the selectedFile when a searchTerm is entered
-    if (selectedFile) {
-      setSelectedFile(null);
-      setSelectedFileUrl(null);
+    if (selectedFiles && selectedFiles.length > 0) {
+      setSelectedFiles([]);
+      setSelectedFileUrls([]);
     }
   };
 
@@ -98,9 +103,9 @@ export default function Home({ bannerHeight}) {
     // console.log('Entering handleCriteriaFormChange')
     // console.log('Updated form data:', updatedFormData);
 
-    if (selectedFile) {
-      setSelectedFile(null);
-      setSelectedFileUrl(null);
+    if (selectedFiles && selectedFiles.length > 0) {
+      setSelectedFiles([]);
+      setSelectedFileUrls([]);
     }
 
     // its ok to include search term since this is both VSS + criteria search
@@ -133,22 +138,35 @@ export default function Home({ bannerHeight}) {
     event.preventDefault();
     // setSearchResults([]); // don't clear this here, otherwise the UX will flicker a lot
 
-    if (!selectedFile && !searchTerm && isFormDataEmpty(criteriaSearchFormData)) {
+    if (selectedFiles.length == 0 && !searchTerm && isFormDataEmpty(criteriaSearchFormData)) {
       alert('Please select a file, enter a search term, or fill out the criteria search form.');
       return;
     }
 
     console.log('Search submitted:', criteriaSearchFormData);
+    console.log(`Invalid search: selectedFiles.length=${selectedFiles.length} selectedFiles=${JSON.stringify(selectedFiles.map(file => ({ name: file.name, type: file.type, size: file.size })))}, selectedFileUrls=${JSON.stringify(selectedFileUrls)} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
+
 
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
     // console.log('apiURL:', apiURL);
 
-    if (selectedFile && (searchMode != 'IMAGE_TO_TEXT_VSS') && (searchMode != 'IMAGE_TO_IMAGE_TEXT_VSS')) {   // perform image (to image) search
+    if (selectedFiles.length > 0 && (searchMode != 'IMAGE_TO_TEXT_VSS') && (searchMode != 'IMAGE_TO_IMAGE_TEXT_VSS')) {   // perform image (to image) search
       const formData = new FormData();
-      formData.append('file', selectedFile);
+
+      if (selectedFiles.length == 1) {
+        const selectedFile = selectedFiles[0];
+        formData.append('file', selectedFile);
+      }
+      else {
+        selectedFiles.forEach(file => {  
+          formData.append('files', file);
+        });
+      }
+
+      const apiEndpoint = selectedFiles.length > 1 ? '/many-image-search' : '/search-by-image/';
 
       try {
-        const response = await fetch(`${apiURL}/search-by-image/`, {
+        const response = await fetch(`${apiURL}${apiEndpoint}`, {
           method: 'POST',
           body: formData,
         });
@@ -281,12 +299,18 @@ export default function Home({ bannerHeight}) {
     }
 
     if (searchMode === 'IMAGE_TO_TEXT_VSS') {
-      if (!selectedFile) {
+      if (selectedFiles.length == 0) {
         alert('Please select an image to search.');
         return;
       }
 
+      if (selectedFiles.length > 1) {
+        alert('Only one querying image is supported in this search mode.');
+        return;
+      }
+
       const formData = new FormData();
+      const selectedFile = selectedFiles[0];
       formData.append('file', selectedFile);
 
       try {
@@ -305,12 +329,18 @@ export default function Home({ bannerHeight}) {
     }
 
     if (searchMode === 'IMAGE_TO_IMAGE_TEXT_VSS') {
-      if (!selectedFile) {
+      if (selectedFiles.length == 0) {
         alert('Please select an image to search.');
         return;
       }
 
+      if (selectedFiles.length > 1) {
+        alert('Only one querying image is supported in this search mode.');
+        return;
+      }
+
       const formData = new FormData();
+      const selectedFile = selectedFiles[0];
       formData.append('file', selectedFile);
 
       try {
@@ -329,7 +359,7 @@ export default function Home({ bannerHeight}) {
     }
 
     // we reach here if non of above conditions are met (this explicitly requires all above have a return)
-    alert(`Invalid search: selectedFile=${selectedFile}, selectedFileUrl=${selectedFileUrl} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
+    alert(`Invalid search: selectedFiles=${JSON.stringify(selectedFiles.map(file => ({ name: file.name, type: file.type, size: file.size })))}, selectedFileUrls=${JSON.stringify(selectedFileUrls)} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
 
     // TODO: if we get here, we should consider clear the previous search results and render an error
   };
@@ -342,7 +372,8 @@ export default function Home({ bannerHeight}) {
 
     <div className="container" style={{ paddingTop: bannerHeight + 10}}>
       <div className={searchContainerClass}>
-        <FileUpload onFileChange={handleFileChange} selectedFileUrl={selectedFileUrl}/>
+        {/* <FileUpload onFileChange={handleFileChange} selectedFileUrl={selectedFileUrl}/> */}
+        <FileUpload onFileChange={handleFileChange} selectedFileUrls={selectedFileUrls}/>
         <div className="text-and-button">
           <TextSearch 
             searchTerm={searchTerm}
