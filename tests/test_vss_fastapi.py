@@ -30,7 +30,7 @@ class TestVSSFastAPI(unittest.TestCase):
 
     # check keys 
     self.assertIn('listingId', data[0])
-    self.assertIn('avg_score', data[0])
+    self.assertIn('agg_score', data[0])
     self.assertIn('image_names', data[0])
 
     # check image_names is a list of jpg filenames

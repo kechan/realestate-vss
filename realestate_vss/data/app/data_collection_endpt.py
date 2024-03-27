@@ -9,7 +9,7 @@ from dotenv import load_dotenv, find_dotenv
 
 from celery_unstack import unstack
 from celery_embed import embed_images
-from celery_update_embeddings import update_embeddings
+from celery_update_embeddings import update_embeddings, update_inactive_embeddings
 
 # use this to establish a public endpt for image tagging service pipeline to upload image to
 # ./ngrok http 8000 
@@ -77,6 +77,16 @@ async def update_vec_index():
   update_embeddings.apply_async(args=[str(img_cache_folder)], queue='update_embed_queue')
 
   return JSONResponse(content={"message": "Updating vector index."})
+
+@app.get("/update_inactive_vec_index")
+async def update_inactive_vec_index():
+  """
+  Consolidate all embeddings in img_cache_folder and update the vector index for the search service.
+  """
+  update_inactive_embeddings.apply_async(args=[str(img_cache_folder)], queue='update_embed_queue')
+
+  return JSONResponse(content={"message": "Updating inactive vector index."})
+
 
 
 # Run the server and reload on changes

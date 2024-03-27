@@ -11,6 +11,7 @@ from celery.utils.log import get_task_logger
 import realestate_core.common.class_extensions
 from realestate_core.common.utils import join_df
 from realestate_vss.data.index import FaissIndex
+from realestate_vss.data.es_client import ESClient
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -120,6 +121,8 @@ def update_embeddings(img_cache_folder: str):
     # 1) delete
     # there's currently no good way to detect deletion of listings 
     # one possible way is to periodically query the ES to see if the listing is still active, but this could be expensive.
+    # We will do this less frequently, say once a day, so this will be in a separate task
+
 
     # 2) Additions
     # detect new listing 
@@ -186,7 +189,63 @@ def update_embeddings(img_cache_folder: str):
     if (working_folder/f'{job_id}_listing_df').exists():
       os.remove(working_folder/f'{job_id}_listing_df')
   
+@celery.task
+def update_inactive_embeddings(img_cache_folder: str):
+  """
+  Remove inactive listings from faiss indexes and listing_df
+  """
 
+  # get env vars to set up ES client.
+  _ = load_dotenv(find_dotenv())
+  if "ES_HOST" in os.environ and "ES_PORT" and "ES_LISTING_INDEX_NAME" in os.environ:
+    es_host = Path(os.environ["ES_HOST"])
+    es_port = Path(os.environ["ES_PORT"])
+    listing_index_name = Path(os.environ["ES_LISTING_INDEX_NAME"])
+  else:
+    raise ValueError("ES_HOST, ES_PORT and ES_LISTING_INDEX_NAME not found in .env")
+  
+  es = ESClient(host=es_host, port=es_port, index_name=listing_index_name)
+  if not es.ping():
+    celery_logger.info('ES is not accessible. Exiting...')
+    return
+  
+  img_cache_folder = Path(img_cache_folder)
+  working_folder = img_cache_folder/f'{model_name}_{pretrained}'
 
+  if (working_folder/'faiss_image_index.index').exists() and (working_folder/'faiss_image_index.aux_info_df').exists() and (working_folder/'listing_df').exists():
+    faiss_image_index = FaissIndex(filepath=working_folder/'faiss_image_index')
+    faiss_text_index = FaissIndex(filepath=working_folder/'faiss_text_index')
+    existing_listing_df = pd.read_feather(working_folder/'listing_df')
 
+    listingIds = existing_listing_df.jumpId.unique().tolist()
+
+    # use ES to get active the listings in listingIds
+    listing_docs = es.get_active_listings(listingIds)
+
+    active_listingIds = [doc['jumpId'] for doc in listing_docs]
+
+    inactive_listingIds = set(listingIds) - set(active_listingIds)
+
+    # remove items from faiss indexes and listing_df  
+    if len(inactive_listingIds) > 0:
+      celery_logger.info(f'Removing {len(inactive_listingIds)} inactive listings from indexes and listing_df')
+
+      items_to_remove = faiss_image_index.aux_info.q("listing_id.isin(@inactive_listingIds)")[faiss_image_index.aux_key].values.tolist()
+      faiss_image_index.remove(items_to_remove)
+
+      items_to_remove = faiss_text_index.aux_info.q("listing_id.isin(@inactive_listingIds)")[faiss_text_index.aux_key].unique().tolist()
+      faiss_text_index.remove(items_to_remove)
+
+      existing_listing_df.drop(index=existing_listing_df.q("jumpId.isin(@inactive_listingIds)").index, inplace=True)
+      existing_listing_df.defrag_index(inplace=True)
+
+      # save the index to disk
+      faiss_image_index.save(working_folder/'faiss_image_index')
+      faiss_text_index.save(working_folder/'faiss_text_index')
+
+      existing_listing_df.to_feather(working_folder/'listing_df')
+    else:
+      celery_logger.info('No inactive listings to remove from indexes and listing_df')
+
+      
 

@@ -58,7 +58,7 @@ export default function ImageSearchResults({ searchResults }) {
                 </Link>
               </div>
               <div className={searchStyles['listing-score']}>
-                {listing.avg_score ? parseFloat(listing.avg_score).toFixed(2) : 'N/A'}
+                {listing.agg_score ? parseFloat(listing.agg_score).toFixed(2) : 'N/A'}
               </div>
               <div className={imageSearchstyles.images}>
                 {listing.image_names.length > 0 ? (

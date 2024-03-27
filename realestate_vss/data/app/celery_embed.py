@@ -13,6 +13,7 @@ import realestate_core.common.class_extensions
 from realestate_core.common.utils import flatten_list
 from realestate_vss.models.embedding import OpenClipImageEmbeddingModel, OpenClipTextEmbeddingModel
 
+from realestate_vss.data.es_client import ESClient
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import NotFoundError
 from elasticsearch.helpers import scan
@@ -68,31 +69,13 @@ def embed_images(self, img_cache_folder: str, listing_start_num: Optional[int] =
   embeddings_df.to_feather(img_cache_folder/f'{model_name}_{pretrained}'/f'{job_id}_image_embeddings_df')
 
   # get ES json for each listing, and embed the remarks
-  es = Elasticsearch([f'http://{es_host}:{es_port}/'])   # TODO: read this from .env
+  # es = Elasticsearch([f'http://{es_host}:{es_port}/'])   
+  es = ESClient(host=es_host, port=es_port, index_name=listing_index_name)
   if not es.ping():
     celery_logger.info('ES is not accessible. Exiting...')
     return
-  
-  # Define the query to match all listingIds, which is the folder name
-  query = {
-    "query": {
-        "bool": {
-            "must": [
-                {"terms": {"_id": [folder.parts[-1] for folder in listing_folders]}},
-                {"match": {"listingStatus": "ACTIVE"}}
-            ]
-        }
-    },
-    "_source": ['jumpId', 'city', 'provState', 'postalCode', 'lat', 'lng', 'streetName',
-                'beds', 'bedsInt', 'baths', 'bathsInt', 'sizeInterior',
-                'sizeInteriorUOM', 'lotSize', 'lotUOM', 'propertyFeatures',
-                'propertyType', 'transactionType', 'carriageTrade', 'price',
-                'leasePrice', 'pool', 'garage', 'waterFront', 'fireplace', 'ac',
-                'remarks', 'photo']
-  }
 
-  listing_docs = scan(es, index=listing_index_name, query=query)
-  listing_jsons = [doc['_source'] for doc in listing_docs]
+  listing_jsons = es.get_active_listings([folder.parts[-1] for folder in listing_folders])
 
   if len(listing_jsons) > 0:
     listing_df = pd.DataFrame(listing_jsons)

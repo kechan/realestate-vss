@@ -233,6 +233,7 @@ class ListingData(BaseModel):
   remarks: Optional[str] = None
   listing_id: str
   photo: Optional[str] = None
+  listingDate: Optional[str] = None
 
 class PartialListingData(BaseModel):
   jumpId: str
@@ -264,19 +265,19 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
     Using the provided image file as query to the search engine, return a list of listings with images
     that are most similar to it.
 
-    The returned list is sorted by average similarity score in descending order.
+    The returned list is sorted by aggregated similarity score in descending order.
     E.g.
     [
       {
         "listingId": "21125523",
-        "avg_score": "0.7692008018493652",
+        "agg_score": "0.7692008018493652",
         "image_names": [
           "21125523/21125523_4.jpg"
         ]
       },
       {
         "listingId": "20953965",
-        "avg_score": "0.7561193406581879",
+        "agg_score": "0.7561193406581879",
         "image_names": [
           "20953965/20953965_0.jpg",
           "20953965/20953965_1.jpg",
@@ -286,7 +287,7 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
       },
       {
         "listingId": "20911679",
-        "avg_score": "0.7544260919094086",
+        "agg_score": "0.7544260919094086",
         "image_names": [
           "20911679/20911679_48.jpg",
           "20911679/20911679_49.jpg"
@@ -423,6 +424,31 @@ async def image_2_image_text_search(file: UploadFile = File(...)):
 
   return listings
 
+
+@app.post("/many-image-search")
+async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
+  """
+  Using the provided image files as query to the search engine, return a list of listings with images
+  that are most similar to it.
+
+  The returned list is sorted by aggregated similarity score in descending order.
+  """
+  images = []
+  for file in files:
+    image_data = await file.read()
+
+    try:
+      image = Image.open(io.BytesIO(image_data))
+      images.append(image)
+    except Exception as e:
+      return f'error: Invalid image file {file.filename}'
+
+  try:
+    listings = search_engine.many_image_search(images, topk=50, group_by_listingId=True)
+  except Exception as e:
+    return f'search engine error: {e}'
+
+  return listings
 
 # for testing before UI is built
 @app.post("/search-by-image-html/", response_class=HTMLResponse)
