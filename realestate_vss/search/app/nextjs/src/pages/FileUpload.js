@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import styles from '../styles/FileUpload.module.css';
 
 export default function FileUpload({ onFileChange, selectedFileUrls }) {
-  const [selectedFile, setSelectedFile] = useState(null);
+  // const [selectedFile, setSelectedFile] = useState(null);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [dragOver, setDragOver] = useState(false);
 

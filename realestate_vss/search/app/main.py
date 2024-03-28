@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from realestate_vss.models.embedding import OpenClipTextEmbeddingModel, OpenClipImageEmbeddingModel
-from realestate_vss.search.engine import ListingSearchEngine, SearchMode
+from realestate_vss.search.engine import ListingSearchEngine, SearchMode, ScoreAggregationMethod
 
 import realestate_core.common.class_extensions
 from realestate_core.common.utils import join_df
@@ -200,7 +200,8 @@ async def startup_event():
           partition_by_province=False,
           faiss_image_index=faiss_image_index, 
           faiss_text_index=faiss_text_index, 
-          listing_df=listing_df
+          listing_df=listing_df,
+          score_aggregation_method=ScoreAggregationMethod.MAX
           )
 
 class ListingData(BaseModel):

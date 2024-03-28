@@ -5,6 +5,7 @@ export const ClearCacheButton = () => {
   const clearCache = () => {
     localStorage.clear();
     alert('Cache cleared!');
+    window.location.reload();
   }
 
   return (

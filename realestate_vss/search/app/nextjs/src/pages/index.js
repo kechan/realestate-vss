@@ -28,10 +28,11 @@ export default function Home({ bannerHeight}) {
 
   // Load the search results from Local Storage when the component mounts
   useEffect(() => {
-    // console.log('first effect')
+    // console.log('first use effect')
     const savedSearchResults = localStorage.getItem('searchResults');
     const savedSearchTerm = localStorage.getItem('searchTerm');
     const savedSearchMode = localStorage.getItem('searchMode');
+    const savedSelectedFileUrls = localStorage.getItem('selectedFileUrls');
 
     if (savedSearchResults) {
       const results = JSON.parse(savedSearchResults);
@@ -49,6 +50,11 @@ export default function Home({ bannerHeight}) {
     if (savedSearchMode) {
       setSearchMode(savedSearchMode);
     }
+
+    // TODO: THis doesnt work well.
+    // if (savedSelectedFileUrls) {
+    //   setSelectedFileUrls(JSON.parse(savedSelectedFileUrls));
+    // }
     
   }, []); // Empty dependency array ensures this runs once on client-side mount
   
@@ -62,10 +68,10 @@ export default function Home({ bannerHeight}) {
   }, [searchResults]); // Runs this effect whenever searchResults changes
 
   // useEffect(() => {
-  //   // Assuming textSearchMode is a state variable in your component
-  //   localStorage.setItem('textSearchMode', textSearchMode);
-  //   console.log('Saving textSearchMode to localStorage:', textSearchMode);
-  // }, [textSearchMode]);
+  //   if (selectedFileUrls.length > 0) {
+  //   localStorage.setItem('selectedFileUrls', JSON.stringify(selectedFileUrls));
+  //   }
+  // }, [selectedFileUrls]);
 
 
   const handleFileChange = (files) => {
@@ -144,7 +150,7 @@ export default function Home({ bannerHeight}) {
     }
 
     console.log('Search submitted:', criteriaSearchFormData);
-    console.log(`Invalid search: selectedFiles.length=${selectedFiles.length} selectedFiles=${JSON.stringify(selectedFiles.map(file => ({ name: file.name, type: file.type, size: file.size })))}, selectedFileUrls=${JSON.stringify(selectedFileUrls)} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
+    console.log(`Search params: selectedFiles.length=${selectedFiles.length} selectedFiles=${JSON.stringify(selectedFiles.map(file => ({ name: file.name, type: file.type, size: file.size })))}, selectedFileUrls=${JSON.stringify(selectedFileUrls)} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
 
 
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
