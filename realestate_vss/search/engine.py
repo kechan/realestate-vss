@@ -494,36 +494,56 @@ class ListingSearchEngine:
 
 
   def many_image_search(self, images: List[Image.Image], topk=5, group_by_listingId=False):
-    all_top_image_names = []
-    all_scores = []
-    for image in images:
-      image_features = self.image_embedder.embed_from_single_image(image)
+    use_mean_vector = True
+    print('use_mean_vector', use_mean_vector)
+    if use_mean_vector:
+      all_image_features = []
+      for image in images:
+        image_features = self.image_embedder.embed_from_single_image(image)
+        all_image_features.append(image_features)
+        
+      # compute mean vector
+      mean_vector = np.mean(all_image_features, axis=0)
       if isinstance(self.faiss_image_index, FaissIndex):
-        scores, top_image_names = self._query_faiss_index(self.faiss_image_index, image_features, topk=topk)
-        all_top_image_names.extend(top_image_names)
-        all_scores.extend(scores)
-      else:
-        raise NotImplementedError('Non ..data.index.FaissIndex image index is not supported')
-
-    if group_by_listingId:
-      # Group by listingId after collecting all the results
-      listings = self._gen_listings_from_image_search(all_top_image_names, all_scores)
-      # Sort the listings by agg score in descending order
-      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-      return listings
+        scores, top_image_names = self._query_faiss_index(self.faiss_image_index, mean_vector, topk=topk)
+        if group_by_listingId:
+          listings = self._gen_listings_from_image_search(top_image_names, scores)
+          # Sort the listings by agg score in descending order
+          listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
+          return listings
+        
+        return top_image_names, scores
     else:
-      # Pair up image names and scores, sort by score, and unzip back into separate lists
-      pairs = sorted(zip(all_top_image_names, all_scores), key=lambda pair: pair[1], reverse=True)
-      all_top_image_names, all_scores = zip(*pairs)
-      # Aggregate scores for duplicate image names
-      score_dict = defaultdict(list)
-      for name, score in zip(all_top_image_names, all_scores):
-        score_dict[name].append(score)
-      # Compute max score for each image name
-      max_scores = {name: max(scores) for name, scores in score_dict.items()}
-      # Sort image names by max score in descending order
-      sorted_image_names = sorted(max_scores, key=max_scores.get, reverse=True)
-      return sorted_image_names, [max_scores[name] for name in sorted_image_names]
+      all_top_image_names = []
+      all_scores = []
+      for image in images:
+        image_features = self.image_embedder.embed_from_single_image(image)
+        if isinstance(self.faiss_image_index, FaissIndex):
+          scores, top_image_names = self._query_faiss_index(self.faiss_image_index, image_features, topk=topk)
+          all_top_image_names.extend(top_image_names)
+          all_scores.extend(scores)
+        else:
+          raise NotImplementedError('Non ..data.index.FaissIndex image index is not supported')
+
+      if group_by_listingId:
+        # Group by listingId after collecting all the results
+        listings = self._gen_listings_from_image_search(all_top_image_names, all_scores)
+        # Sort the listings by agg score in descending order
+        listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
+        return listings
+      else:
+        # Pair up image names and scores, sort by score, and unzip back into separate lists
+        pairs = sorted(zip(all_top_image_names, all_scores), key=lambda pair: pair[1], reverse=True)
+        all_top_image_names, all_scores = zip(*pairs)
+        # Aggregate scores for duplicate image names
+        score_dict = defaultdict(list)
+        for name, score in zip(all_top_image_names, all_scores):
+          score_dict[name].append(score)
+        # Compute max score for each image name
+        max_scores = {name: max(scores) for name, scores in score_dict.items()}
+        # Sort image names by max score in descending order
+        sorted_image_names = sorted(max_scores, key=max_scores.get, reverse=True)
+        return sorted_image_names, [max_scores[name] for name in sorted_image_names]
 
   def visualize_image_search_results(self, image_names: List[str], scores: List[float], photos_dir: Path = '.') -> Image:
     resize = 350

@@ -68,7 +68,7 @@ class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
     else:
       return image_names, embeddings
 
-  def embed_from_single_image(self, image: Image, return_df=False) -> pd.DataFrame:
+  def embed_from_single_image(self, image: Image.Image, return_df=False) -> pd.DataFrame:
     '''
     This method is for single PIL.Image and its likely used during VSS & point inference
     '''

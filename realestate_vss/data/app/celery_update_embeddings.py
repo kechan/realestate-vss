@@ -128,8 +128,6 @@ def update_embeddings(img_cache_folder: str):
     # detect new listing 
     new_listingIds = incoming_listingIds - existing_listingIds
     if len(new_listingIds):
-      # Continue here to add new listing images and remark chunks to the index
-
       # add new image embeddings
       images_to_add = list(image_embeddings_df.q("listing_id.isin(@new_listingIds)").image_name.values)
       new_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_add)")
@@ -150,22 +148,25 @@ def update_embeddings(img_cache_folder: str):
 
     # 3) Update existing listings
     updated_listingIds = incoming_listingIds.intersection(existing_listingIds)
+   
+    if len(updated_listingIds) > 0:
+      # update image embeddings
+      images_to_update = list(image_embeddings_df.q("listing_id.isin(@updated_listingIds)").image_name.values)
+      updated_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_update)")
+      aux_info = updated_image_embeddings_df.drop(columns=['embedding'])
+      embeddings = np.stack(updated_image_embeddings_df.embedding.values)
 
-    # update image embeddings
-    images_to_update = list(image_embeddings_df.q("listing_id.isin(@updated_listingIds)").image_name.values)
-    updated_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_update)")
-    aux_info = updated_image_embeddings_df.drop(columns=['embedding'])
-    embeddings = np.stack(updated_image_embeddings_df.embedding.values)
+      faiss_image_index.update(embeddings=embeddings, aux_info=aux_info)
 
-    faiss_image_index.update(embeddings=embeddings, aux_info=aux_info)
+      # update text embeddings
+      text_chunks_to_update = list(text_embeddings_df.q("listing_id.isin(@updated_listingIds)").remark_chunk_id.values)
+      updated_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_update)")
+      aux_info = updated_text_embeddings_df.drop(columns=['embedding'])
+      embeddings = np.stack(updated_text_embeddings_df.embedding.values)
 
-    # update text embeddings
-    text_chunks_to_update = list(text_embeddings_df.q("listing_id.isin(@updated_listingIds)").remark_chunk_id.values)
-    updated_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_update)")
-    aux_info = updated_text_embeddings_df.drop(columns=['embedding'])
-    embeddings = np.stack(updated_text_embeddings_df.embedding.values)
-
-    faiss_text_index.update(embeddings=embeddings, aux_info=aux_info)
+      faiss_text_index.update(embeddings=embeddings, aux_info=aux_info)
+    else:
+      celery_logger.info('No updated listings to update in index.')
 
   # save the index to disk
   faiss_image_index.save(working_folder/'faiss_image_index')

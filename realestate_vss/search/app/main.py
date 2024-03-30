@@ -347,6 +347,7 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
     raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
 
 
+
 @app.post("/search-by-text/")
 async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[List[Optional[int]]]]], 
                          mode: SearchMode = Query(SearchMode.VSS_ONLY), 
