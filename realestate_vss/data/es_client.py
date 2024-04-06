@@ -35,7 +35,7 @@ class ESClient:
                   'sizeInteriorUOM', 'lotSize', 'lotUOM', 'propertyFeatures',
                   'propertyType', 'transactionType', 'carriageTrade', 'price',
                   'leasePrice', 'pool', 'garage', 'waterFront', 'fireplace', 'ac',
-                  'remarks', 'photo', 'listingDate']
+                  'remarks', 'photo', 'listingDate', 'lastUpdate', 'lastPhotoUpdate']
     }
     
     listing_docs = scan(self.es, index=self.index_name, query=query)

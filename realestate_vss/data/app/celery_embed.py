@@ -35,7 +35,7 @@ pretrained='laion2b_s32b_b82k'
 @celery.task(bind=True, acks_late=False, max_retries=2)
 def embed_images(self, img_cache_folder: str, listing_start_num: Optional[int] = None, listing_end_num: Optional[int] = None):
   _ = load_dotenv(find_dotenv())
-  if "ES_HOST" in os.environ and "ES_PORT" and "ES_LISTING_INDEX_NAME" in os.environ:
+  if "ES_HOST" in os.environ and "ES_PORT" in os.environ and "ES_LISTING_INDEX_NAME" in os.environ:
     es_host = Path(os.environ["ES_HOST"])
     es_port = Path(os.environ["ES_PORT"])
     listing_index_name = Path(os.environ["ES_LISTING_INDEX_NAME"])

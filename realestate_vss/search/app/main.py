@@ -47,12 +47,27 @@ app.add_middleware(
 
 # Global variable to hold the search engine instance
 search_engine = None
+datastore = None
 
 # non global variables
 if "LOCAL_PROJECT_HOME" in os.environ:
   local_project_home = Path(os.getenv("LOCAL_PROJECT_HOME"))
 else:
   raise Exception("LOCAL_PROJECT_HOME environment variable not set in .env file")
+
+if "USE_REDIS" in os.environ:
+  use_redis = (os.getenv("USE_REDIS").lower() == 'true')
+  print(f'Using Redis: {use_redis}')
+  if use_redis:
+    REDIS_HOST = os.getenv("REDIS_HOST")
+    REDIS_PORT = int(os.getenv("REDIS_PORT"))
+    print(f'Using Redis server: {REDIS_HOST}:{REDIS_PORT}')
+else:
+  use_redis = False
+
+if use_redis:
+  import redis
+  from realestate_vss.data.datastore import RedisDataStore
 
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
@@ -74,7 +89,7 @@ else:
 
 # check if FAISS index folder is defined, if so, use FAISS index to later instantiate search engine
 # and not use the dataframes
-if "FAISS_INDEX_FOLDER" in os.environ:
+if "FAISS_INDEX_FOLDER" in os.environ and not use_redis:    # if redis is used, no need for FAISS index 
   faiss_index_folder = Path(os.getenv("FAISS_INDEX_FOLDER"))
   if not faiss_index_folder.is_dir():
     raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
@@ -170,39 +185,51 @@ async def load_listing_df():
 @app.on_event("startup")
 async def startup_event():
   global search_engine
+  global datastore
 
   device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
   image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
   text_embedder = OpenClipTextEmbeddingModel(embedding_model=image_embedder)
 
-  if faiss_index_folder is None:
-    # Async retrieval of embeddings
-    image_embeddings_df = await load_images_dataframe()
-    text_embeddings_df = await load_texts_dataframe()
-    listing_df = await load_listing_df()
 
-    if 'listing_id' not in image_embeddings_df.columns:    
-      image_embeddings_df['listing_id'] = image_embeddings_df.image_name.apply(get_listingId_from_image_name)
-
-    search_engine = ListingSearchEngine(
-          image_embeddings_df=image_embeddings_df, 
-          text_embeddings_df=text_embeddings_df, 
-          image_embedder=image_embedder, 
-          text_embedder=text_embedder,
-          partition_by_province=False
-          )
+  if use_redis:
+    pool = redis.ConnectionPool(
+                  host=REDIS_HOST,
+                  port=REDIS_PORT,
+                  db=0
+              )
+    # redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
+    redis_client = redis.Redis(connection_pool=pool)
+    datastore = RedisDataStore(client=redis_client, image_embedder=image_embedder, text_embedder=text_embedder)
   else:
-    faiss_image_index, faiss_text_index = await load_faiss_indexes()
-    listing_df = await load_listing_df()
-    search_engine = ListingSearchEngine(
-          image_embedder=image_embedder, 
-          text_embedder=text_embedder,
-          partition_by_province=False,
-          faiss_image_index=faiss_image_index, 
-          faiss_text_index=faiss_text_index, 
-          listing_df=listing_df,
-          score_aggregation_method=ScoreAggregationMethod.MAX
-          )
+    if faiss_index_folder is None:
+      # Async retrieval of embeddings
+      image_embeddings_df = await load_images_dataframe()
+      text_embeddings_df = await load_texts_dataframe()
+      listing_df = await load_listing_df()
+
+      if 'listing_id' not in image_embeddings_df.columns:    
+        image_embeddings_df['listing_id'] = image_embeddings_df.image_name.apply(get_listingId_from_image_name)
+
+      search_engine = ListingSearchEngine(
+            image_embeddings_df=image_embeddings_df, 
+            text_embeddings_df=text_embeddings_df, 
+            image_embedder=image_embedder, 
+            text_embedder=text_embedder,
+            partition_by_province=False
+            )
+    else:
+      faiss_image_index, faiss_text_index = await load_faiss_indexes()
+      listing_df = await load_listing_df()
+      search_engine = ListingSearchEngine(
+            image_embedder=image_embedder, 
+            text_embedder=text_embedder,
+            partition_by_province=False,
+            faiss_image_index=faiss_image_index, 
+            faiss_text_index=faiss_text_index, 
+            listing_df=listing_df,
+            score_aggregation_method=ScoreAggregationMethod.MAX
+            )
 
 class ListingData(BaseModel):
   jumpId: str
@@ -240,9 +267,13 @@ class PartialListingData(BaseModel):
   jumpId: str
   image_name: Optional[str] = None
 
+
 @app.get("/listing/{listingId}")
 async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
-  listing_data = search_engine.get_listing(listingId)
+  if search_engine is not None:
+    listing_data = search_engine.get_listing(listingId)
+  elif use_redis:
+    listing_data = datastore.get_listing(listingId)
 
   if not listing_data:
       raise HTTPException(status_code=404, detail="Listing not found")
@@ -256,7 +287,11 @@ async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
 
 @app.get("/images/{listingId}")
 async def read_images(listingId: str) -> List[str]:
-  image_names = search_engine.get_imagenames(listingId)
+  if search_engine is not None:
+    image_names = search_engine.get_imagenames(listingId)
+  elif use_redis:
+    image_names = datastore.get_imagenames(listingId)
+
   image_names = [f"{listingId}/{image_name}" for image_name in image_names]
   return image_names
 
@@ -305,10 +340,13 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
       return f'error: Invalid image file'
 
     try:
-      # image_names, scores = search_engine.image_search(image, topk=50)
-      listings = search_engine.image_search(image, topk=50, group_by_listingId=True)
+      if search_engine is not None:
+        # image_names, scores = search_engine.image_search(image, topk=50)
+        listings = search_engine.image_search(image, topk=50, group_by_listingId=True)
+      elif use_redis:
+        listings = datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, **{})
     except Exception as e:
-      return f'search engine error: {e}'
+      return f'Error: {e}'
 
     return listings
 
@@ -337,16 +375,46 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
     ext = Path(image_name).suffix
     image_name = f'{image_name_wo_ext}_lg{ext}'
 
-    photo_url = 'https:' + str(Path(search_engine.get_listing(listingId)['photo']).parent) + '/' + image_name
+    if search_engine is not None:
+      photo_url = 'https:' + str(Path(search_engine.get_listing(listingId)['photo']).parent) + '/' + image_name
+    elif use_redis:
+      photo_url = 'https:' + str(Path(datastore.get_listing(listingId)['photo']).parent) + '/' + image_name
 
     async with httpx.AsyncClient() as client:
       response = await client.get(photo_url)
       response.raise_for_status()
       return StreamingResponse(io.BytesIO(response.content), media_type='image/jpeg')
   except Exception as e:
+    print(e)
     raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
 
+def cleanup_query_for_redis(query: str) -> str:
+  """
+    Clean up query to conform to valid redis query.
 
+    Parameters:
+    query (dict): The query to be cleaned up.
+
+    Returns:
+    dict: The cleaned up query.
+  """
+  for key in list(query.keys()):
+      val = query[key]
+      if val is None:
+        del query[key]
+      elif isinstance(val, list) or isinstance(val, tuple):
+        if val[0] is None and val[1] is None:
+          del query[key]
+      elif isinstance(val, int) or isinstance(val, float):  # NumericField
+        # somehow, only range search works, so expand x -> [x x]
+        query[key] = [val, val]
+      elif isinstance(val, str):
+        try:
+          num_val = float(val)
+          query[key] = [num_val, num_val]
+        except ValueError:
+          pass
+  return query
 
 @app.post("/search-by-text/")
 async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[List[Optional[int]]]]], 
@@ -354,48 +422,85 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
                          lambda_val: float = Query(0.8, description="Required if mode is SOFT_MATCH_AND_VSS."), 
                          alpha_val: float = Query(0.5, description="Required if mode is SOFT_MATCH_AND_VSS.")
 ):
+  if search_engine is not None:
   
-  phrase = query.get('phrase', None)
-  if phrase is not None:
-    del query['phrase']   # remove key phrase from query after extracting it
+    phrase = query.get('phrase', None)
+    if phrase is not None:
+      del query['phrase']   # remove key phrase from query after extracting it
 
-  provState = query.get('provState', None)
-  
-  print(f'query: {query}')
-  if provState is None and (mode == SearchMode.VSS_RERANK_ONLY or mode == SearchMode.SOFT_MATCH_AND_VSS):
-    raise HTTPException(status_code=404, detail="provState must be provided")
+    provState = query.get('provState', None)
+    
+    print(f'query: {query}')
+    if provState is None and (mode == SearchMode.VSS_RERANK_ONLY or mode == SearchMode.SOFT_MATCH_AND_VSS):
+      raise HTTPException(status_code=404, detail="provState must be provided")
 
-  if mode == SearchMode.VSS_ONLY or mode == SearchMode.VSS_RERANK_ONLY:
-    results = search_engine.text_search(mode, topk=20, phrase=phrase, return_df=False, **query)
-  elif mode == SearchMode.SOFT_MATCH_AND_VSS:
-    results = search_engine.text_search(mode, topk=20, return_df=False, lambda_val=lambda_val, alpha_val=alpha_val, phrase=phrase, **query)
-  else:
-    raise HTTPException(status_code=404, detail="Invalid search mode")
-  
+    if mode == SearchMode.VSS_ONLY or mode == SearchMode.VSS_RERANK_ONLY:
+      results = search_engine.text_search(mode, topk=20, phrase=phrase, return_df=False, **query)
+    elif mode == SearchMode.SOFT_MATCH_AND_VSS:
+      results = search_engine.text_search(mode, topk=20, return_df=False, lambda_val=lambda_val, alpha_val=alpha_val, phrase=phrase, **query)
+    else:
+      raise HTTPException(status_code=404, detail="Invalid search mode")
+    
+  elif use_redis:
+    phrase = query.get('phrase', None)
+    if phrase is not None:
+      del query['phrase']   # remove key phrase from query after extracting it
+   
+    # clean up query to conform to valid redis query
+    print(f'before cleanup: {query}')
+    query = cleanup_query_for_redis(query)
+    print(f'after cleanup: {query}')
+
+    results = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+    # add "listing_id" key to each result
+    for result in results:
+      result['listing_id'] = result['listingId']
+      
   return results
+
 
 @app.post("/text-to-image-search/")
 async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str]]]]:
-  try:
-    # image_names, scores = search_engine.text_2_image_search(phrase=query['phrase'], topk=50)
-    listings = search_engine.text_2_image_search(phrase=query['phrase'], topk=50, group_by_listingId=True)
-  except Exception as e:
-    return f'search engine error: {e}'
+  if search_engine is not None:
+    try:
+      # image_names, scores = search_engine.text_2_image_search(phrase=query['phrase'], topk=50)
+      listings = search_engine.text_2_image_search(phrase=query['phrase'], topk=50, group_by_listingId=True)
+    except Exception as e:
+      return f'search engine error: {e}'
+  elif use_redis:    
+    phrase = query.get('phrase', None)
+    if phrase is not None:
+      del query['phrase']   # remove key phrase from query after extracting it
+
+    try:
+      listings = datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, **query)
+    except Exception as e:
+      return f'search engine error: {e}'
 
   return listings
 
 @app.post("/text-to-image-text-search/")
 async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str], str]]]:
-  try:
+  
+  # try:
+  if search_engine is not None:
     listings = search_engine.text_2_image_text_search(phrase=query['phrase'], topk=50)
-  except Exception as e:
-    return f'search engine error: {e}'
+  elif use_redis:
+    phrase = query.get('phrase', None)
+    if phrase is not None:
+      del query['phrase']
+
+    listings = datastore.search(phrase=phrase, topk=50, group_by_listingId=True, **query)
+
+  # except Exception as e:
+  #   return f'search engine error: {e}'
   
   return listings
 
 
 @app.post("/image-to-text-search")
 async def image_2_text_search(file: UploadFile = File(...)):
+  
   image_data = await file.read()
 
   try:
@@ -404,7 +509,10 @@ async def image_2_text_search(file: UploadFile = File(...)):
     return f'error: Invalid image file'
 
   try:
-    listings = search_engine.image_2_text_search(image, topk=50)
+    if search_engine is not None:
+      listings = search_engine.image_2_text_search(image, topk=50)
+    elif use_redis:
+      listings = datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
   except Exception as e:
     return f'search engine error: {e}'
 
@@ -412,6 +520,7 @@ async def image_2_text_search(file: UploadFile = File(...)):
 
 @app.post("/image-to-image-text-search")
 async def image_2_image_text_search(file: UploadFile = File(...)):
+
   image_data = await file.read()
 
   try:
@@ -420,7 +529,10 @@ async def image_2_image_text_search(file: UploadFile = File(...)):
     return f'error: Invalid image file'
 
   try:
-    listings = search_engine.image_2_image_text_search(image, topk=50)
+    if search_engine is not None:
+      listings = search_engine.image_2_image_text_search(image, topk=50)
+    elif use_redis:
+      listings = datastore.search(image=image, topk=50, group_by_listingId=True, **{})
   except Exception as e:
     return f'search engine error: {e}'
 
@@ -435,6 +547,9 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
 
   The returned list is sorted by aggregated similarity score in descending order.
   """
+  if search_engine is None:
+    raise HTTPException(status_code=503, detail="Search engine not initialized or not configured for use.")
+  
   images = []
   for file in files:
     image_data = await file.read()
@@ -468,6 +583,9 @@ async def search_by_image_html(file: UploadFile = File(...)) -> HTMLResponse:
 
 @app.get("/sanity_check")
 async def sanity_check() -> str:
+  if search_engine is None:
+    raise HTTPException(status_code=503, detail="Search engine not initialized or not configured for use.")
+  
   # global image_embeddings_df, text_embeddings_df
   n_images = search_engine.image_embeddings_df.shape[0]
   n_listings = search_engine.image_embeddings_df.listing_id.nunique()

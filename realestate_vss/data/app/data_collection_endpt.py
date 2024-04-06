@@ -1,5 +1,5 @@
-from typing import Optional
-from fastapi import FastAPI, File, UploadFile, Form
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
 import shutil, os
@@ -59,6 +59,15 @@ async def submit(
 
   # Respond with status of the upload
   return JSONResponse(content={"message": f"file {file.filename} saved with metadata."})
+
+@app.post("/submit_listing_jsons/")
+async def submit_listing_jsons(request: Request):
+  try:
+    json_data: List[Dict[str, Any]] = await request.json()
+    return {"message": "Data processed successfully", "received_records": len(json_data)}
+  except Exception as e:
+    raise HTTPException(status_code=400, detail=f"Error processing data: {str(e)}")
+
 
 @app.get("/embed")
 async def embed():
