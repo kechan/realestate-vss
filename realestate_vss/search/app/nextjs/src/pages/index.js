@@ -24,7 +24,8 @@ export default function Home({ bannerHeight}) {
 
   const [criteriaSearchFormData, setCriteriaSearchFormData] = useState({});
 
-  const [searchMode, setSearchMode] = useState('TEXT_TO_IMAGE_TEXT_VSS');
+  // const [searchMode, setSearchMode] = useState('TEXT_TO_IMAGE_TEXT_VSS');
+  const [searchMode, setSearchMode] = useState('ALL_TO_ALL');
 
   // Load the search results from Local Storage when the component mounts
   useEffect(() => {
@@ -78,7 +79,8 @@ export default function Home({ bannerHeight}) {
     // setSelectedFile(file);
     setSelectedFiles(files);
     // Clear the searchTerm when a file is selected for upload
-    if (searchTerm) setSearchTerm('');
+    // Note: don't need this in order to enable ALL_TO_ALL
+    // if (searchTerm) setSearchTerm('');
     // setSelectedFileUrl(file ? URL.createObjectURL(file) : null);
     setSelectedFileUrls(files.map(file => URL.createObjectURL(file)));
 
@@ -92,10 +94,11 @@ export default function Home({ bannerHeight}) {
     setSearchTerm(newSearchTerm);
     localStorage.setItem('searchTerm', newSearchTerm);   // persists to work for browser back button
     // Clear the selectedFile when a searchTerm is entered
-    if (selectedFiles && selectedFiles.length > 0) {
-      setSelectedFiles([]);
-      setSelectedFileUrls([]);
-    }
+    // Note: don't need this in order to enable ALL_TO_ALL
+    // if (selectedFiles && selectedFiles.length > 0) {
+    //   setSelectedFiles([]);
+    //   setSelectedFileUrls([]);
+    // }
   };
 
   const handleTextSearchSubmit = async (event) => {
@@ -155,6 +158,36 @@ export default function Home({ bannerHeight}) {
 
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
     // console.log('apiURL:', apiURL);
+
+    if (searchMode == 'ALL_TO_ALL') {
+
+      if (selectedFiles.length == 0 && !searchTerm) {
+        alert('Please at least select an image to search or enter a search term.');
+        return;
+      }
+      // supporting only single image for now
+      const formData = new FormData();
+      if (selectedFiles.length == 1) {
+        const selectedFile = selectedFiles[0];
+        formData.append('file', selectedFile);
+      }
+
+      const queryBody = { ...criteriaSearchFormData, phrase: searchTerm };
+      formData.append('query_body', JSON.stringify(queryBody));
+
+      try {
+        const response = await fetch(`${apiURL}/search/`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+        data.searchType = 'image'  // no full listing detail
+        setSearchResults(data); // Update the state with the search results
+      } catch (error) {
+        console.error('Error:', error);
+      }
+      return
+    }
 
     if (selectedFiles.length > 0 && (searchMode != 'IMAGE_TO_TEXT_VSS') && (searchMode != 'IMAGE_TO_IMAGE_TEXT_VSS')) {   // perform image (to image) search
       const formData = new FormData();
@@ -410,6 +443,7 @@ export default function Home({ bannerHeight}) {
                   <option value="TEXT_TO_IMAGE_TEXT_VSS">📝 &rarr; 🖼️+📝 Text to Image&Remarks</option>
                   <option value="IMAGE_TO_TEXT_VSS">🖼️ &rarr; 📝 Image to Remarks</option>
                   <option value="IMAGE_TO_IMAGE_TEXT_VSS">🖼️ &rarr; 🖼️+📝 Image to Image & Remarks</option>
+                  <option value="ALL_TO_ALL">📝 🖼️ &rarr; 🖼️+📝 All modalities</option>
                 </select>
 
               </div>

@@ -71,7 +71,7 @@ export default function ImageSearchResults({ searchResults }) {
                     />
                   ))
                 ) : (
-                  <div className={imageSearchstyles['no-images']}>No images available</div>
+                  <div className={imageSearchstyles['no-images']}>No images matched or available</div>
                 )}
               </div>
             </div>

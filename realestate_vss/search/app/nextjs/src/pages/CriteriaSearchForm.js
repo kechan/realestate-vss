@@ -11,6 +11,8 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
   const [minPrice, setMinPrice] = useState(null);
   const [maxPrice, setMaxPrice] = useState(null);
 
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
+
   const [snackbarOpen, setSnackbarOpen] = useState(false);
 
   useEffect(() => {
@@ -163,7 +165,13 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
               </Select>
             </FormControl>
           </Grid>
-          {searchMode === 'SOFT_MATCH_AND_VSS' && (
+          <Grid item xs={12} container justifyContent="flex-end">
+            <Button className={styles.showMoreButton} onClick={() => setShowMoreOptions(!showMoreOptions)}>
+              {showMoreOptions ? '⬆ Show Less' : '⬇ Show More'}
+            </Button>
+          </Grid>
+
+          {showMoreOptions && (
             <>
               <Grid item xs={12}>
                 <FormControl fullWidth>
@@ -213,8 +221,9 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
                 </FormControl>
               </Grid>
             </>
-          )}
+          )}          
         </Grid>        
+
       </form>
 
       <Snackbar

@@ -61,7 +61,8 @@ def process_redis_docs(embeddings_df: pd.DataFrame,
                        listingIds: List[str], 
                        datastore: RedisDataStore, 
                        aux_key: str,
-                       listing_df: pd.DataFrame) -> None:
+                       listing_df: pd.DataFrame,
+                       embedding_type: str = 'I') -> None:
   """
   Function to process embeddings and perform operations(add/delete) on Redis.
 
@@ -78,7 +79,7 @@ def process_redis_docs(embeddings_df: pd.DataFrame,
   processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
   _df = join_df(processed_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
   listing_jsons = _df.to_dict(orient='records')
-  datastore.batch_insert(listing_jsons)
+  datastore.batch_insert(listing_jsons, embedding_type=embedding_type)
 
 @celery.task
 def update_embeddings(img_cache_folder: str):
@@ -280,7 +281,7 @@ def update_embeddings(img_cache_folder: str):
   # listing_jsons = _df.to_dict(orient='records')
   # datastore.batch_insert(listing_jsons)
 
-  process_redis_docs(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df)
+  process_redis_docs(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
 
   # text_chunks_to_add = list(text_embeddings_df.q("listing_id.isin(@new_listingIds)").remark_chunk_id.values)
   # new_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_add)")
@@ -288,7 +289,7 @@ def update_embeddings(img_cache_folder: str):
   # listing_jsons = _df.to_dict(orient='records')
   # datastore.batch_insert(listing_jsons)
 
-  process_redis_docs(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df)
+  process_redis_docs(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
   # Updated listings
   updated_listingIds = incoming_listingIds.intersection(existing_listingIds)
@@ -301,7 +302,7 @@ def update_embeddings(img_cache_folder: str):
   # datastore.batch_insert(listing_jsons)
 
   celery_logger.info(f'Updating image embeddings for {len(updated_listingIds)} listings in Redis')
-  process_redis_docs(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df)
+  process_redis_docs(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
 
   # text_chunks_to_update = list(text_embeddings_df.q("listing_id.isin(@updated_listingIds)").remark_chunk_id.values)
   # updated_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_update)")
@@ -310,7 +311,7 @@ def update_embeddings(img_cache_folder: str):
   # datastore.batch_insert(listing_jsons)
 
   celery_logger.info(f'Updating text embeddings for {len(updated_listingIds)} listings in Redis')
-  process_redis_docs(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df)
+  process_redis_docs(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
 
   # Clean up current job id specific files

@@ -1,5 +1,5 @@
 from typing import Dict, List, Union, Tuple, Any, Optional
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -400,7 +400,7 @@ def cleanup_query_for_redis(query: str) -> str:
   """
   for key in list(query.keys()):
       val = query[key]
-      if val is None:
+      if val is None or val == '':
         del query[key]
       elif isinstance(val, list) or isinstance(val, tuple):
         if val[0] is None and val[1] is None:
@@ -482,18 +482,18 @@ async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[st
 @app.post("/text-to-image-text-search/")
 async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str], str]]]:
   
-  # try:
-  if search_engine is not None:
-    listings = search_engine.text_2_image_text_search(phrase=query['phrase'], topk=50)
-  elif use_redis:
-    phrase = query.get('phrase', None)
-    if phrase is not None:
-      del query['phrase']
+  try:
+    if search_engine is not None:
+      listings = search_engine.text_2_image_text_search(phrase=query['phrase'], topk=50)
+    elif use_redis:
+      phrase = query.get('phrase', None)
+      if phrase is not None:
+        del query['phrase']
 
-    listings = datastore.search(phrase=phrase, topk=50, group_by_listingId=True, **query)
+      listings = datastore.search(phrase=phrase, topk=50, group_by_listingId=True, **query)
 
-  # except Exception as e:
-  #   return f'search engine error: {e}'
+  except Exception as e:
+    return f'Error: {e}'
   
   return listings
 
@@ -514,7 +514,7 @@ async def image_2_text_search(file: UploadFile = File(...)):
     elif use_redis:
       listings = datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
   except Exception as e:
-    return f'search engine error: {e}'
+    return f'Error: {e}'
 
   return listings
 
@@ -566,6 +566,59 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
     return f'search engine error: {e}'
 
   return listings
+
+
+# class QueryModel(BaseModel):
+#   query: dict
+
+@app.post("/search")
+# async def search(file: Optional[UploadFile] = None, query: Optional[Dict[str, Any]] = None):
+async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFile] = File(None)):
+  """
+  One search to rule them all (full cross modality)
+
+  Parameters:
+  file (UploadFile): The image file to search by image.
+  query (dict): The query to search by text.
+
+  """
+  
+  if search_engine is not None and not use_redis:   # TODO later
+    raise NotImplementedError("Search by image or text is not supported when using FAISS index")
+
+  image = None
+  if file is not None:
+    image_data = await file.read()
+    try:
+      image = Image.open(io.BytesIO(image_data))
+    except Exception as e:
+      image = None
+      return f'error: Invalid image file {file.filename}'
+    
+  if query_body is not None:
+    try:
+      query = json.loads(query_body)
+      print(f'before cleanup: {query}')
+      query = cleanup_query_for_redis(query)
+      print(f'after cleanup: {query}')
+    except json.JSONDecodeError:
+      return {"error": f"Invalid JSON format in query_body {query_body}."}
+    
+    phrase = query.get('phrase', None)
+    print(f'phrase: {phrase}')
+    if phrase is not None:
+      del query['phrase']   # remove key phrase from query after extracting it
+  else:
+    phrase = None
+    query = {}
+    
+  try:
+    listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, **query)
+  except Exception as e:
+    return f'Error: {e}'
+  
+  return listings
+
 
 # for testing before UI is built
 @app.post("/search-by-image-html/", response_class=HTMLResponse)

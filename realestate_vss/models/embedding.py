@@ -4,6 +4,7 @@ from pathlib import Path
 import open_clip, torch
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import pandas as pd
+import numpy as np
 from PIL import Image
 
 import spacy
@@ -80,6 +81,26 @@ class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
       return pd.DataFrame(data={'embedding': image_features})
     else:
       return image_features
+    
+  def embed_from_images(self, images: List[Image.Image], batch_size=64, return_df=False) -> pd.DataFrame:
+    '''
+    This method is for multiple PIL.Images and its likely used during VSS & point inference
+    '''
+    embeddings = []
+
+    for i in tqdm(range(0, len(images), batch_size), desc='Processing images'):
+      batch_images = images[i: i + batch_size]
+      image_tensors = [self.preprocess(image).unsqueeze(0).to(self.device) for image in batch_images]
+      image_tensors = torch.cat(image_tensors, dim=0)  # Concatenate along the batch dimension
+
+      with torch.no_grad():
+        image_features = self.model.encode_image(image_tensors, normalize=True).cpu().numpy()
+        embeddings.extend(list(image_features))
+
+    if return_df:
+      return pd.DataFrame(data={'embedding': embeddings})
+    else:
+      return np.array(embeddings)
   
 
 class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):

@@ -5,9 +5,10 @@ from elasticsearch.exceptions import NotFoundError
 from elasticsearch.helpers import scan
 
 class ESClient:
-  def __init__(self, host: str, port: int, index_name: str):
+  def __init__(self, host: str, port: int, index_name: str, fields: List[str] = None):
     self.es = Elasticsearch([f'http://{host}:{port}/'])
     self.index_name = index_name
+    self.fields = fields    # desired top level key/value in json to return
 
   def ping(self) -> bool:
     return self.es.ping()
@@ -30,12 +31,7 @@ class ESClient:
               ]
           }
       },
-      "_source": ['jumpId', 'city', 'provState', 'postalCode', 'lat', 'lng', 'streetName',
-                  'beds', 'bedsInt', 'baths', 'bathsInt', 'sizeInterior',
-                  'sizeInteriorUOM', 'lotSize', 'lotUOM', 'propertyFeatures',
-                  'propertyType', 'transactionType', 'carriageTrade', 'price',
-                  'leasePrice', 'pool', 'garage', 'waterFront', 'fireplace', 'ac',
-                  'remarks', 'photo', 'listingDate', 'lastUpdate', 'lastPhotoUpdate']
+      "_source": self.fields if self.fields else ['jumpId']
     }
     
     listing_docs = scan(self.es, index=self.index_name, query=query)

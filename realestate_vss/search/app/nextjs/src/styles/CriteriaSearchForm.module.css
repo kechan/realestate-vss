@@ -38,3 +38,28 @@
 .formControl fieldset {
   display: none !important; /* This will hide the fieldset entirely */
 }
+
+/* Show more/less button */
+
+.showMoreButton {
+  /* background-color: rgba(255, 255, 255, 0.8); Light whitish background */
+  background-color: #A81B22;
+  color: #A81B22;
+  border: 1px solid #A81B22; /* Light border */
+  padding: 10px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.2s, border-color 0.2s;
+  font-weight: bold;
+}
+
+.showMoreButton:hover {
+  background-color: #ffffff; /* Fully white on hover */
+  border-color: #A81B22; /* Darker border on hover */
+}
+
+.showMoreButton:focus {
+  /* border-color: #aaa; Even darker for focus to improve accessibility */
+  border-color: #A81B22; /* Even darker for focus to improve accessibility */
+}
