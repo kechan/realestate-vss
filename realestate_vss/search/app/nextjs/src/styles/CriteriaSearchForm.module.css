@@ -41,17 +41,24 @@
 
 /* Show more/less button */
 
-.showMoreButton {
-  /* background-color: rgba(255, 255, 255, 0.8); Light whitish background */
-  background-color: #A81B22;
+.showMoreButton.showMoreButton {
+  background-color: rgba(255, 255, 255, 0.8); /* Light whitish background */
+  /* background-color: #A81B22; */
   color: #A81B22;
-  border: 1px solid #A81B22; /* Light border */
-  padding: 10px 20px;
+  /* border: 0.5px solid #A81B22; Light border */
+  /* padding: 10px 20px; */
   border-radius: 5px;
   cursor: pointer;
   outline: none;
   transition: background-color 0.2s, border-color 0.2s;
-  font-weight: bold;
+  /* font-weight: bold; */
+
+  /* Font styles for consistency */
+  font-family: 'Roboto', sans-serif; /* Ensuring we're using Roboto */
+  font-size: 0.75rem; /* Adjusting the font size to be a bit smaller */
+  font-weight: 500; /* Medium font weight, not too bold, not too light */
+  text-transform: uppercase; /* Optional: if other buttons are uppercase */
+  letter-spacing: 0.5px;
 }
 
 .showMoreButton:hover {
@@ -59,7 +66,7 @@
   border-color: #A81B22; /* Darker border on hover */
 }
 
-.showMoreButton:focus {
-  /* border-color: #aaa; Even darker for focus to improve accessibility */
-  border-color: #A81B22; /* Even darker for focus to improve accessibility */
+.showMoreButton.showMoreButton:focus {
+  border-color: #aaa; /* Even darker for focus to improve accessibility */
+  /* border-color: #A81B22; Even darker for focus to improve accessibility */
 }
