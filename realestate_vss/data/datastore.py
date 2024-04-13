@@ -360,20 +360,28 @@ class RedisDataStore:
     
     return top_remark_chunk_ids, top_scores
 
-  def search(self, image: Image.Image = None, phrase: str = None, topk=5, group_by_listingId=False, **filters):
+  def search(self, 
+             image: Image.Image = None, 
+             image_embedding: bytes = None,
+             phrase: str = None, 
+             text_embedding: bytes = None,
+             topk=5, 
+             group_by_listingId=False, 
+             **filters):
     # check if no image or phrase is provided, than just return empty thing
 
-    if not image and not phrase:
+    if (not image and not phrase) and (not image_embedding and not text_embedding):
       if group_by_listingId: return []
       else: return [], []
 
     combined_results = []
-    if image:
-      image_features = self.image_embedder.embed_from_single_image(image).flatten().tolist()   # list[float]
-      embedding = np.array(image_features, dtype=np.float64).tobytes()
+    if image or image_embedding:
+      if image_embedding is None:
+        image_features = self.image_embedder.embed_from_single_image(image).flatten().tolist()   # list[float]
+        image_embedding = np.array(image_features, dtype=np.float64).tobytes()
 
-      listings_image_image = self._search_image_2_image(embedding=embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)    
-      listings_image_text = self._search_image_2_text(embedding=embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
+      listings_image_image = self._search_image_2_image(embedding=image_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)    
+      listings_image_text = self._search_image_2_text(embedding=image_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
 
       if group_by_listingId:        
         listings_image_image = self.normalize_scores(listings_image_image, 'agg_score')
@@ -390,12 +398,13 @@ class RedisDataStore:
         top_scores += top_scores_2
     
     combined_results_2 = []
-    if phrase:
-      text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()   # list[float]
-      embedding = np.array(text_features, dtype=np.float64).tobytes()
+    if phrase or text_embedding:
+      if text_embedding is None:
+        text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()   # list[float]
+        text_embedding = np.array(text_features, dtype=np.float64).tobytes()
 
-      listings_text_image = self._search_text_2_image(embedding=embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)    
-      listings_text_text = self._search_text_2_text(embedding=embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
+      listings_text_image = self._search_text_2_image(embedding=text_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)    
+      listings_text_text = self._search_text_2_text(embedding=text_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
 
       if group_by_listingId:
         listings_text_image = self.normalize_scores(listings_text_image, 'agg_score')
@@ -422,6 +431,29 @@ class RedisDataStore:
       # sort tuples by score in descending order
       top_item_names, top_scores = zip(*sorted(zip(top_item_names, top_scores), key=lambda x: x[1], reverse=True))
       return top_item_names, top_scores
+
+  def multi_image_search(self, images: List[Image.Image], phrase: str = None, topk=5, group_by_listingId=False, **filters):
+    # use mean(image embeddings) for now.
+    all_image_features = []
+    # print(f'# of images: {len(images)}')
+    for image in images:
+      image_features = self.image_embedder.embed_from_single_image(image)
+      # print(f'Image features shape: {image_features.shape}')
+      all_image_features.append(image_features)
+    mean_vector = np.mean(all_image_features, axis=0)
+    # print(f'Mean vector shape: {mean_vector.shape}')
+
+    image_features = mean_vector.flatten().tolist()   # list[float]
+    image_embedding = np.array(image_features, dtype=np.float64).tobytes()
+
+    text_embedding = None
+    if phrase:
+      text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
+      text_embedding = np.array(text_features, dtype=np.float64).tobytes()
+
+    return self.search(image_embedding=image_embedding, text_embedding=text_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
+
+
 
 
   def _preprocess_listing_json(self, listing_json: Dict) -> Dict:

@@ -189,17 +189,12 @@ def update_embeddings(img_cache_folder: str):
     # one possible way is to periodically query the ES to see if the listing is still active, but this could be expensive.
     # We will do this less frequently, say once a day, so this will be in a separate task
 
-
     # 2) Additions
     # detect new listing 
     new_listingIds = incoming_listingIds - existing_listingIds
     if len(new_listingIds) > 0:
       # add new image embeddings
-      # images_to_add = list(image_embeddings_df.q("listing_id.isin(@new_listingIds)").image_name.values)
-      # new_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_add)")
-      # aux_info = new_image_embeddings_df.drop(columns=['embedding'])
-      # embeddings = np.stack(new_image_embeddings_df.embedding.values)
-
+     
       # faiss_image_index.add(embeddings=embeddings, aux_info=aux_info)
       upsert_embeddings_to_faiss(embeddings_df=image_embeddings_df, 
                                   listingIds=new_listingIds, 
@@ -208,18 +203,11 @@ def update_embeddings(img_cache_folder: str):
                                   aux_key='image_name')
 
       # add new text embeddings
-      # text_chunks_to_add = list(text_embeddings_df.q("listing_id.isin(@new_listingIds)").remark_chunk_id.values)
-      # new_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_add)")
-      # aux_info = new_text_embeddings_df.drop(columns=['embedding'])
-      # embeddings = np.stack(new_text_embeddings_df.embedding.values)
-
-      # faiss_text_index.add(embeddings=embeddings, aux_info=aux_info)
       upsert_embeddings_to_faiss(embeddings_df=text_embeddings_df, 
                                   listingIds=new_listingIds, 
                                   faiss_index=faiss_text_index, 
                                   operation='add', 
                                   aux_key='remark_chunk_id')
-
 
     else:
       celery_logger.info('No new listings to add to index.')
@@ -229,12 +217,6 @@ def update_embeddings(img_cache_folder: str):
    
     if len(updated_listingIds) > 0:
       # update image embeddings
-      # images_to_update = list(image_embeddings_df.q("listing_id.isin(@updated_listingIds)").image_name.values)
-      # updated_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_update)")
-      # aux_info = updated_image_embeddings_df.drop(columns=['embedding'])
-      # embeddings = np.stack(updated_image_embeddings_df.embedding.values)
-
-      # faiss_image_index.update(embeddings=embeddings, aux_info=aux_info)
       upsert_embeddings_to_faiss(embeddings_df=image_embeddings_df,
                                   listingIds=updated_listingIds,
                                   faiss_index=faiss_image_index,
@@ -242,12 +224,6 @@ def update_embeddings(img_cache_folder: str):
                                   aux_key='image_name')
 
       # update text embeddings
-      # text_chunks_to_update = list(text_embeddings_df.q("listing_id.isin(@updated_listingIds)").remark_chunk_id.values)
-      # updated_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_update)")
-      # aux_info = updated_text_embeddings_df.drop(columns=['embedding'])
-      # embeddings = np.stack(updated_text_embeddings_df.embedding.values)
-
-      # faiss_text_index.update(embeddings=embeddings, aux_info=aux_info)
       upsert_embeddings_to_faiss(embeddings_df=text_embeddings_df,
                                   listingIds=updated_listingIds,
                                   faiss_index=faiss_text_index,
@@ -275,44 +251,20 @@ def update_embeddings(img_cache_folder: str):
   # New listings
   new_listingIds = incoming_listingIds - existing_listingIds
 
-  # images_to_add = list(image_embeddings_df.q("listing_id.isin(@new_listingIds)").image_name.values)
-  # new_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_add)")
-  # _df = join_df(new_image_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
-  # listing_jsons = _df.to_dict(orient='records')
-  # datastore.batch_insert(listing_jsons)
-
+  celery_logger.info(f'Adding image embedding for {len(new_listingIds)} new listings to Redis')
   process_redis_docs(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
-
-  # text_chunks_to_add = list(text_embeddings_df.q("listing_id.isin(@new_listingIds)").remark_chunk_id.values)
-  # new_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_add)")
-  # _df = join_df(new_text_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
-  # listing_jsons = _df.to_dict(orient='records')
-  # datastore.batch_insert(listing_jsons)
-
+  celery_logger.info(f'Adding text embedding for {len(new_listingIds)} new listings to Redis')
   process_redis_docs(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
   # Updated listings
   updated_listingIds = incoming_listingIds.intersection(existing_listingIds)
   datastore.delete_listings(listing_ids=updated_listingIds)  # delete and reinsert
 
-  # images_to_update = list(image_embeddings_df.q("listing_id.isin(@updated_listingIds)").image_name.values)
-  # updated_image_embeddings_df = image_embeddings_df.q("image_name.isin(@images_to_update)")
-  # _df = join_df(updated_image_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
-  # listing_jsons = _df.to_dict(orient='records')
-  # datastore.batch_insert(listing_jsons)
-
   celery_logger.info(f'Updating image embeddings for {len(updated_listingIds)} listings in Redis')
   process_redis_docs(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
 
-  # text_chunks_to_update = list(text_embeddings_df.q("listing_id.isin(@updated_listingIds)").remark_chunk_id.values)
-  # updated_text_embeddings_df = text_embeddings_df.q("remark_chunk_id.isin(@text_chunks_to_update)")
-  # _df = join_df(updated_text_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
-  # listing_jsons = _df.to_dict(orient='records')
-  # datastore.batch_insert(listing_jsons)
-
   celery_logger.info(f'Updating text embeddings for {len(updated_listingIds)} listings in Redis')
   process_redis_docs(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
-
 
   # Clean up current job id specific files
   for job_id in job_ids:

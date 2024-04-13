@@ -9,7 +9,8 @@ export default function TextSearchResults({ searchResults }) {
     () => [
       {
         Header: 'Listing',
-        accessor: 'listing_id', // Ensure the accessor matches the corresponding key in your data
+        // accessor: 'listing_id', 
+        accessor: (row) => row['listing_id'] || row['listingId'], // Check for both 'listing_id' and 'listingId'
         Cell: ({ value }) => (
           <Link href={`/listing/${value}`} className={styles['listing-link']}>
             {value}

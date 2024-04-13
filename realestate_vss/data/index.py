@@ -7,7 +7,7 @@ import numpy as np
 import faiss, copy, gc
 
 class FaissIndex:
-  # def __init__(self, embeddings: np.ndarray, aux_info: pd.DataFrame, aux_key: str = None):
+  
   def __init__(self, 
                embeddings: Optional[np.ndarray] = None, 
                aux_info: Optional[pd.DataFrame] = None, 
@@ -39,6 +39,16 @@ class FaissIndex:
       # explit delete of self.embeddings to save memory, since we don't need it anymore
       del self.embeddings
       gc.collect()
+
+  @classmethod
+  def from_dataframe(cls, df: pd.DataFrame, aux_key: str, embedding_column: str = 'embedding'):
+    if embedding_column not in df.columns or aux_key not in df.columns:
+      raise ValueError(f'{embedding_column} and {aux_key} must be columns in the dataframe')
+    
+    embeddings = np.stack(df[embedding_column].values)
+    aux_info = df.drop(columns=[embedding_column])  # dont want to store all the embeddings in aux info
+    return cls(embeddings=embeddings, aux_info=aux_info, aux_key=aux_key)
+
 
   def add(self, embeddings: np.array, aux_info: pd.DataFrame):
     assert len(embeddings) == len(aux_info), 'each vector in embeddings must have corresponding aux_info'
@@ -99,7 +109,7 @@ class FaissIndex:
       query_str = ' & '.join([f"{k} == '{v}'" if isinstance(v, str) else f"{k} == {v}" for k, v in filters.items()])    
     else:
       query_str = ' & '.join([f"{k}.str.lower() == '{v.lower()}'" if isinstance(v, str) else f"{k} == {v}" for k, v in filters.items()])
-    print(query_str)
+    # print(f'query_str: {query_str}')
 
     try:
       wanted_listingIds = set(listing_df.q(query_str).jumpId.values)
@@ -126,6 +136,9 @@ class FaissIndex:
 
     Side Effects:
         Saves the partitioned index files to the output directory.
+
+    E.g.
+      faiss_image_index.partition(listing_df, attribute='provState', output_dir=Path.home()/'tmp')
     """
     if output_dir is None and self.filepath is not None:
       output_dir = self.filepath.parent   # save in the same dir as this index (if it was loaded from file)      

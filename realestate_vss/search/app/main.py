@@ -571,6 +571,45 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
 # class QueryModel(BaseModel):
 #   query: dict
 
+
+@app.post("/multi-image-search")
+async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)):
+  if search_engine is not None and not use_redis:   # TODO later
+    raise NotImplementedError("Full multi modeal search by images (>1) or text is not supported when using FAISS index")
+  
+  images: List[Image.Image] = []
+  for file in files:
+    image_data = await file.read()
+    try:
+      image = Image.open(io.BytesIO(image_data))
+      images.append(image)
+    except Exception as e:
+      return f'error: Invalid image file {file.filename}'
+    
+  if query_body is not None:
+    try:
+      query = json.loads(query_body)
+      print(f'before cleanup: {query}')
+      query = cleanup_query_for_redis(query)
+      print(f'after cleanup: {query}')
+    except json.JSONDecodeError:
+      return {"error": f"Invalid JSON format in query_body {query_body}"}
+    
+    phrase = query.get('phrase', None)
+    print(f'phrase: {phrase}')
+    if phrase is not None:
+      del query['phrase']   # remove key phrase from query after extracting it
+  else:
+    phrase = None
+    query = {}
+
+  try:
+    listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
+  except Exception as e:
+    return f'Error: {e}'
+  
+  return listings
+
 @app.post("/search")
 # async def search(file: Optional[UploadFile] = None, query: Optional[Dict[str, Any]] = None):
 async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFile] = File(None)):
@@ -584,7 +623,7 @@ async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFi
   """
   
   if search_engine is not None and not use_redis:   # TODO later
-    raise NotImplementedError("Search by image or text is not supported when using FAISS index")
+    raise NotImplementedError("Full multi modeal search by image or text is not supported when using FAISS index")
 
   image = None
   if file is not None:

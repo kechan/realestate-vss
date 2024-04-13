@@ -84,10 +84,11 @@ export default function Home({ bannerHeight}) {
     // setSelectedFileUrl(file ? URL.createObjectURL(file) : null);
     setSelectedFileUrls(files.map(file => URL.createObjectURL(file)));
 
-    // Clear the criteria search
-    if (!isFormDataEmpty(criteriaSearchFormData)) {
-      setCriteriaSearchFormData({});
-    }
+    // Don't do this, we are supporting full cross multi modal search
+    // Clear the criteria search, 
+    // if (!isFormDataEmpty(criteriaSearchFormData)) {
+    //   setCriteriaSearchFormData({});
+    // }
   }
 
   const handleSearchTermChange = (newSearchTerm) => {
@@ -112,10 +113,10 @@ export default function Home({ bannerHeight}) {
     // console.log('Entering handleCriteriaFormChange')
     // console.log('Updated form data:', updatedFormData);
 
-    if (selectedFiles && selectedFiles.length > 0) {
-      setSelectedFiles([]);
-      setSelectedFileUrls([]);
-    }
+    // if (selectedFiles && selectedFiles.length > 0) {
+    //   setSelectedFiles([]);
+    //   setSelectedFileUrls([]);
+    // }
 
     // its ok to include search term since this is both VSS + criteria search
     // if (searchTerm) {
@@ -152,12 +153,10 @@ export default function Home({ bannerHeight}) {
       return;
     }
 
-    console.log('Search submitted:', criteriaSearchFormData);
+    console.log('Criteria Search Form Data:', criteriaSearchFormData);
     console.log(`Search params: selectedFiles.length=${selectedFiles.length} selectedFiles=${JSON.stringify(selectedFiles.map(file => ({ name: file.name, type: file.type, size: file.size })))}, selectedFileUrls=${JSON.stringify(selectedFileUrls)} searchMode=${searchMode}, searchTerm=${searchTerm}, criteriaSearchFormData=${JSON.stringify(criteriaSearchFormData)}`);
 
-
     const apiURL = process.env.NEXT_PUBLIC_SEARCH_API_URL;
-    // console.log('apiURL:', apiURL);
 
     if (searchMode == 'ALL_TO_ALL') {
 
@@ -165,18 +164,26 @@ export default function Home({ bannerHeight}) {
         alert('Please at least select an image to search or enter a search term.');
         return;
       }
-      // supporting only single image for now
+
       const formData = new FormData();
       if (selectedFiles.length == 1) {
         const selectedFile = selectedFiles[0];
         formData.append('file', selectedFile);
       }
+      else {
+        selectedFiles.forEach(file => {  
+          formData.append('files', file);
+        });
+      }
+
+      const apiEndpoint = selectedFiles.length > 1 ? '/multi-image-search' : '/search';
+      console.log('apiEndpoint:', apiEndpoint);
 
       const queryBody = { ...criteriaSearchFormData, phrase: searchTerm };
       formData.append('query_body', JSON.stringify(queryBody));
 
       try {
-        const response = await fetch(`${apiURL}/search/`, {
+        const response = await fetch(`${apiURL}${apiEndpoint}`, {
           method: 'POST',
           body: formData,
         });
@@ -203,6 +210,7 @@ export default function Home({ bannerHeight}) {
       }
 
       const apiEndpoint = selectedFiles.length > 1 ? '/many-image-search' : '/search-by-image/';
+      console.log('apiEndpoint:', apiEndpoint);
 
       try {
         const response = await fetch(`${apiURL}${apiEndpoint}`, {

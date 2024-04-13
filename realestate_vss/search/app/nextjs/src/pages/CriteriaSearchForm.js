@@ -25,7 +25,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
     setBathsInt(savedFormData.bathsInt || null);
     setMinPrice(savedFormData.price ? savedFormData.price[0] : null);
     setMaxPrice(savedFormData.price ? savedFormData.price[1] : null);
-
+    setShowMoreOptions(savedFormData.showMoreOptions || false);
   }, []);
 
   // Update the searchCriteria in the parent component whenever the form fields change
@@ -37,6 +37,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
       bedsInt: bedsInt,
       bathsInt: bathsInt,
       price: [minPrice, maxPrice],
+      showMoreOptions: showMoreOptions
     };
     // Check that not all fields are empty
     const isPayloadNotEmpty = payload.provState || payload.city || payload.bedsInt !== null || payload.bathsInt !== null || payload.price.some(price => price !== null);
@@ -50,7 +51,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
 
     setSearchCriteria(payload);
     onFormChange(payload);    // Notify the parent component about the change
-  }, [province, city, bedsInt, bathsInt, minPrice, maxPrice]);
+  }, [province, city, bedsInt, bathsInt, minPrice, maxPrice, showMoreOptions]);
   
   // Update state only if value is a non-negative integer
   const handleIntChange = (value, setter) => {

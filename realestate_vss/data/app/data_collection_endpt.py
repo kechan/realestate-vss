@@ -35,7 +35,7 @@ else:
 
 @app.get("/")
 async def root():
-  return PlainTextResponse("ok")
+  return PlainTextResponse("not_ok")
 
 # Endpoint for submitting images and metadata
 @app.post("/submit/")
