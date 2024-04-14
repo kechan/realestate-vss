@@ -92,6 +92,14 @@
   color: gray;
 }
 
+.listing-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  color: #333;
+}
+
 /* remark section */
 .listing-remarks {
   /* Add spacing above the remarks to separate it from the images */

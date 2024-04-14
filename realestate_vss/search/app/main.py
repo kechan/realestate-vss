@@ -574,8 +574,6 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
 
 @app.post("/multi-image-search")
 async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)):
-  if search_engine is not None and not use_redis:   # TODO later
-    raise NotImplementedError("Full multi modeal search by images (>1) or text is not supported when using FAISS index")
   
   images: List[Image.Image] = []
   for file in files:
@@ -590,8 +588,9 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     try:
       query = json.loads(query_body)
       print(f'before cleanup: {query}')
-      query = cleanup_query_for_redis(query)
-      print(f'after cleanup: {query}')
+      if use_redis:
+        query = cleanup_query_for_redis(query)
+        print(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}"}
     
@@ -604,7 +603,10 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     query = {}
 
   try:
-    listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
+    if search_engine is not None:
+      listings = search_engine.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
+    else:
+      listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
   except Exception as e:
     return f'Error: {e}'
   
@@ -622,9 +624,6 @@ async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFi
 
   """
   
-  if search_engine is not None and not use_redis:   # TODO later
-    raise NotImplementedError("Full multi modeal search by image or text is not supported when using FAISS index")
-
   image = None
   if file is not None:
     image_data = await file.read()
@@ -638,8 +637,9 @@ async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFi
     try:
       query = json.loads(query_body)
       print(f'before cleanup: {query}')
-      query = cleanup_query_for_redis(query)
-      print(f'after cleanup: {query}')
+      if use_redis:
+        query = cleanup_query_for_redis(query)
+        print(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}."}
     
@@ -652,7 +652,10 @@ async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFi
     query = {}
     
   try:
-    listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, **query)
+    if search_engine is not None:
+      listings = search_engine.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+    else:
+      listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, **query)
   except Exception as e:
     return f'Error: {e}'
   

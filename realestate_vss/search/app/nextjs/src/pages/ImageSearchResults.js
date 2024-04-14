@@ -74,6 +74,11 @@ export default function ImageSearchResults({ searchResults }) {
                   <div className={imageSearchstyles['no-images']}>No images matched or available</div>
                 )}
               </div>
+              <div className={imageSearchstyles['listing-info']}>
+                <div>{listing.streetName}, {listing.city}, {listing.provState}</div>
+                <div>Beds/Baths: {listing.bedsInt}/{listing.bathsInt}</div>
+                <div>Price: ${Number(listing.price).toLocaleString()}</div>
+              </div>
             </div>
             {listing.remarks ? (
               <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.remarks)}>
