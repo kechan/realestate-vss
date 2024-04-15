@@ -604,7 +604,7 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
 
   try:
     if search_engine is not None:
-      listings = search_engine.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
+      listings = search_engine.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     else:
       listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
   except Exception as e:
