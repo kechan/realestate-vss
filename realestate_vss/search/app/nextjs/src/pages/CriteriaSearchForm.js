@@ -15,6 +15,8 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
 
   const [snackbarOpen, setSnackbarOpen] = useState(false);
 
+  const [isDisabled, setIsDisabled] = useState(true);   // set to true for temp demo
+
   useEffect(() => {
     // Ensure this code runs only in the client-side environment
     const savedFormData = JSON.parse(localStorage.getItem('criteriaSearchFormData') || '{}');
@@ -147,10 +149,9 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
       <form>    
         <Grid container spacing={3}>
           <Grid item xs={12}>
-            {/* <FormControl variant="outlined" fullWidth className={`${styles.formControl} ${styles.noIndicator} ${styles.noNotch} ${styles.noBorder}`}> */}
-            <FormControl variant="outlined" fullWidth className={`${styles.formControl} ${styles.noIndicator} ${styles.noNotch} ${styles.noBorder}`}>
+            <FormControl variant="outlined" fullWidth className={`${styles.formControl} ${styles.noIndicator} ${styles.noNotch} ${styles.noBorder}`} disabled={isDisabled}>
               <InputLabel id="province-label">Province</InputLabel>
-              <Select labelId="province-label" value={province} onChange={e => setProvince(e.target.value)} className={styles.selectEmpty}>
+              <Select labelId="province-label" value={province} onChange={e => setProvince(e.target.value)} className={styles.selectEmpty} >
                 <MenuItem value={null}>Select a Province</MenuItem>
                 <MenuItem value="ON">Ontario</MenuItem>
                 <MenuItem value="BC">British Columbia</MenuItem>
@@ -167,7 +168,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
             </FormControl>
           </Grid>
           <Grid item xs={12} container justifyContent="flex-end">
-            <Button className={styles.showMoreButton} onClick={() => setShowMoreOptions(!showMoreOptions)}>
+            <Button className={styles.showMoreButton} onClick={() => setShowMoreOptions(!showMoreOptions)} disabled={isDisabled}>
               {showMoreOptions ? '⬆ Show Less' : '⬇ Show More'}
             </Button>
           </Grid>

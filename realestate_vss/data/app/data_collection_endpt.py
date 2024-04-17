@@ -16,6 +16,10 @@ from celery_update_embeddings import update_embeddings, update_inactive_embeddin
 # use this to establish a public endpt for image tagging service pipeline to upload image to
 # ./ngrok http 8000 
 
+# Use this for loca.lt
+# echo "weak-loops-prove.loca.lt" > non_ml_host
+# gsutil cp non_ml_host gs://ai-tests/tmp 
+
 listing_fields = ['jumpId', 'city', 'provState', 'postalCode', 'lat', 'lng', 'streetName',
                   'beds', 'bedsInt', 'baths', 'bathsInt', 'sizeInterior',
                   'sizeInteriorUOM', 'lotSize', 'lotUOM', 'propertyFeatures',
@@ -35,7 +39,7 @@ else:
 
 @app.get("/")
 async def root():
-  return PlainTextResponse("not_ok")
+  return PlainTextResponse("ok")
 
 # Endpoint for submitting images and metadata
 @app.post("/submit/")

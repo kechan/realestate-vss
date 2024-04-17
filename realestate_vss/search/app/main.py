@@ -89,14 +89,24 @@ else:
 
 # check if FAISS index folder is defined, if so, use FAISS index to later instantiate search engine
 # and not use the dataframes
-if "FAISS_INDEX_FOLDER" in os.environ and not use_redis:    # if redis is used, no need for FAISS index 
-  faiss_index_folder = Path(os.getenv("FAISS_INDEX_FOLDER"))
-  if not faiss_index_folder.is_dir():
-    raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
-  print(f'Using FAISS index from {faiss_index_folder}')
+if "FAISS_IMAGE_INDEX" in os.environ and "FAISS_TEXT_INDEX" in os.environ and not use_redis:    # if redis is used, no need for FAISS index 
+  faiss_image_index_path = Path(os.getenv("FAISS_IMAGE_INDEX"))
+  # if not faiss_index_folder.is_dir():
+  #   raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
+  print(f'Using FAISS image index from {faiss_image_index_path}')
+
+  faiss_text_index_path = Path(os.getenv("FAISS_TEXT_INDEX"))
+  print(f'Using FAISS text index from {faiss_text_index_path}')
 else:
-  faiss_index_folder = None
+  faiss_image_index_path = None
+  faiss_text_index_path = None
   print('Not using FAISS index')
+
+if "LISTING_DF" in os.environ:
+  listing_df_path = Path(os.getenv("LISTING_DF"))
+  print(f'Using listing dataframe from {listing_df_path}')
+else:
+  listing_df_path = None
 
 async def load_images_dataframe():
   loop = asyncio.get_event_loop()
@@ -148,7 +158,8 @@ async def load_faiss_indexes():
       None,
       None,
       None,
-      faiss_index_folder / 'faiss_image_index'
+      # faiss_index_folder / 'faiss_image_index'
+      faiss_image_index_path
     )
 
     faiss_text_index = await loop.run_in_executor(
@@ -157,14 +168,15 @@ async def load_faiss_indexes():
       None,
       None,
       None,
-      faiss_index_folder / 'faiss_text_index'
+      # faiss_index_folder / 'faiss_text_index'
+      faiss_text_index_path
     )
 
   return faiss_image_index, faiss_text_index
 
 async def load_listing_df():
   loop = asyncio.get_event_loop()
-  if faiss_index_folder is None:
+  if listing_df_path is None:
     with ThreadPoolExecutor() as pool:
       listing_df = await loop.run_in_executor(
         pool,
@@ -176,9 +188,8 @@ async def load_listing_df():
       listing_df = await loop.run_in_executor(
         pool,
         pd.read_feather,
-        faiss_index_folder / 'listing_df'
+        listing_df_path
       )
-
 
   return listing_df
 
@@ -191,7 +202,6 @@ async def startup_event():
   image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
   text_embedder = OpenClipTextEmbeddingModel(embedding_model=image_embedder)
 
-
   if use_redis:
     pool = redis.ConnectionPool(
                   host=REDIS_HOST,
@@ -202,8 +212,8 @@ async def startup_event():
     redis_client = redis.Redis(connection_pool=pool)
     datastore = RedisDataStore(client=redis_client, image_embedder=image_embedder, text_embedder=text_embedder)
   else:
-    if faiss_index_folder is None:
-      # Async retrieval of embeddings
+    if faiss_image_index_path is None:
+      # Async retrieval of embeddings dataframes
       image_embeddings_df = await load_images_dataframe()
       text_embeddings_df = await load_texts_dataframe()
       listing_df = await load_listing_df()
@@ -230,6 +240,7 @@ async def startup_event():
             listing_df=listing_df,
             score_aggregation_method='max'
             )
+
 
 class ListingData(BaseModel):
   jumpId: str

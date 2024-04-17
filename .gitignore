@@ -166,3 +166,5 @@ cython_debug/
 search/app/nextjs
 **/supervisord.conf
 **/supervisord.pid
+
+upload_tunnelling_host.zsh

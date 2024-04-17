@@ -111,9 +111,11 @@ def embed_listings_from_avm(self, json_data: List[Dict[str, Any]]):
   celery_logger.info(f'len(json_data): {len(json_data)}')
 
   # check if the task has already been processed
-  task_id = self.request.id
+  task_id = 'embed_listings_task:' + self.request.id
   if r.exists(task_id):
     celery_logger.info(f'Task {task_id} already processed. Exiting...')
+    # delete the task from redis
+    r.delete(task_id)
     return
 
   # pd.DataFrame(json_data).to_feather(Path.home()/'tmp'/f'rt_{counter}_listing_df')  # save to manual review for dev and debug
@@ -125,6 +127,15 @@ def embed_listings_from_avm(self, json_data: List[Dict[str, Any]]):
   image_embeddings_df = []
   json_data = json_data[:3]   # TODO: dev/debug, remove later
   for listing in json_data:    
+    # check if photos updated date is newer than the specified date
+    lastUpdate = listing['lastUpdate']
+    lastPhotoUpdate = listing['lastPhotoUpdate']
+    celery_logger.info(f'listing_id: {listing["jumpId"]}, lastUpdate: {lastUpdate}, lastPhotoUpdate: {lastPhotoUpdate}')
+    celery_logger.info(f'{type(lastUpdate)}')
+    celery_logger.info(f'{type(lastPhotoUpdate)}')
+    return
+
+
     image_urls = ['https:' + str(Path(listing['photo']).parent) + f'/{image_name}.jpg' for image_name in listing['photos']]
     image_names = [f'{image_name}.jpg' for image_name in listing['photos']]
     listing_ids = [get_listingId_from_image_name(image_name) for image_name in image_names]
