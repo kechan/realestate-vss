@@ -241,7 +241,6 @@ async def startup_event():
             score_aggregation_method='max'
             )
 
-
 class ListingData(BaseModel):
   jumpId: str
   city: str
@@ -277,7 +276,6 @@ class ListingData(BaseModel):
 class PartialListingData(BaseModel):
   jumpId: str
   image_name: Optional[str] = None
-
 
 @app.get("/listing/{listingId}")
 async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:

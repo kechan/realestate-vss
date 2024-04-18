@@ -40,23 +40,28 @@ class FaissIndex:
         efConstruction = index_params.get('efConstruction', None)
 
         self.index = faiss.IndexHNSWFlat(d, M, faiss.METRIC_INNER_PRODUCT)   # TODO: deal with L2 version of all these later
-        if efConstruction is not None:
+        if efConstruction is None:
           self.index.hnsw.efConstruction = 40
 
       elif index_type == 'HNSWSQ':
         M = index_params.get('M', 16)
+        
         efConstruction = index_params.get('efConstruction', None)
         nbits = index_params.get('nbits', 8)
 
         if nbits == 8:
           sq_quantizer = faiss.ScalarQuantizer.QT_8bit
+        elif nbits == 16:
+          sq_quantizer = faiss.ScalarQuantizer.QT_fp16
         # TODO: add more bit type
+        else:
+          raise ValueError(f'nbits {nbits} not supported')
 
         self.index = faiss.IndexHNSWSQ(d, sq_quantizer, M, faiss.METRIC_INNER_PRODUCT)  # TODO: deal with L2 version of all these later
         # training for the scalar quantizer
         self.index.train(embeddings)
 
-        if efConstruction is not None:
+        if efConstruction is None:
           self.index.hnsw.efConstruction = 40
 
       elif index_type == 'IVFFlat':
@@ -112,15 +117,15 @@ class FaissIndex:
     
     # set query time parameters
     if self.index_type == 'HNSWSQ':
-      efSearch = index_params.get('efSearch', 64)
+      efSearch = self.index_params.get('efSearch', 64)
       self.index.hnsw.efSearch = efSearch
     elif self.index_type == 'IVFFlat':
-      nprobe = index_params.get('nprobe', 16)
+      nprobe = self.index_params.get('nprobe', 16)
       self.index.nprobe = nprobe
       if self.quantizer_type == 'HNSWFlat':
         self.index.quantizer.hnsw.efSearch = 64
     elif self.index_type == 'IVFPQ':
-      nprobe = index_params.get('nprobe', 16)
+      nprobe = self.index_params.get('nprobe', 16)
       self.index.nprobe = nprobe
 
 
