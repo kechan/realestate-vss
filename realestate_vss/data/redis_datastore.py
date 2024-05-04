@@ -199,7 +199,7 @@ class RedisDataStore:
     )
 
     top_scores, top_image_names = [], []
-    listing_remarks = {}
+    # listing_remarks = {}
     all_json_fields = {}
     for doc in query_response.docs:
       doc_json = json.loads(doc.json)
@@ -209,10 +209,13 @@ class RedisDataStore:
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
       remarks = doc_json['remarks']
-      listing_remarks[doc_json['listing_id']] = remarks
+      # listing_remarks[doc_json['listing_id']] = remarks
 
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
+      else:
+        # only store remarks
+        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
@@ -235,7 +238,7 @@ class RedisDataStore:
     )
 
     top_scores, top_remark_chunk_ids = [], []
-    listing_remarks = {}
+    # listing_remarks = {}
     all_json_fields = {}
     for doc in query_response.docs:
       doc_json = json.loads(doc.json)
@@ -245,9 +248,12 @@ class RedisDataStore:
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
       remarks = doc_json['remarks']
-      listing_remarks[doc_json['listing_id']] = remarks
+      # listing_remarks[doc_json['listing_id']] = remarks
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
+      else:
+        # only store remarks
+        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
@@ -270,7 +276,7 @@ class RedisDataStore:
     )
 
     top_scores, top_image_names = [], []
-    listing_remarks = {}
+    # listing_remarks = {}
     all_json_fields = {}
     for doc in query_response.docs:
       doc_json = json.loads(doc.json)
@@ -280,10 +286,13 @@ class RedisDataStore:
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
       remarks = doc_json['remarks']
-      listing_remarks[doc_json['listing_id']] = remarks
+      # listing_remarks[doc_json['listing_id']] = remarks
 
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
+      else:
+        # only store remark
+        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
@@ -306,7 +315,7 @@ class RedisDataStore:
     )
 
     top_scores, top_remark_chunk_ids = [], []
-    listing_remarks = {}
+    # listing_remarks = {}
     all_json_fields = {}
     for doc in query_response.docs:
       doc_json = json.loads(doc.json)
@@ -316,9 +325,12 @@ class RedisDataStore:
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
       remarks = doc_json['remarks']
-      listing_remarks[doc_json['listing_id']] = remarks
+      # listing_remarks[doc_json['listing_id']] = remarks
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
+      else:
+        # only store remark
+        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
@@ -332,6 +344,7 @@ class RedisDataStore:
              text_embedding: bytes = None,
              topk=5, 
              group_by_listingId=False, 
+             include_all_fields=False,
              **filters):
     # check if no image or phrase is provided, than just return empty thing
 
@@ -345,8 +358,23 @@ class RedisDataStore:
         image_features = self.image_embedder.embed_from_single_image(image).flatten().tolist()   # list[float]
         image_embedding = np.array(image_features, dtype=np.float64).tobytes()
 
-      listings_image_image = self._search_image_2_image(embedding=image_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)    
-      listings_image_text = self._search_image_2_text(embedding=image_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
+      listings_image_image = self._search_image_2_image(embedding=image_embedding, topk=topk, 
+                                                        group_by_listingId=group_by_listingId, 
+                                                        include_all_fields=include_all_fields,
+                                                        **filters)
+      listings_image_text = self._search_image_2_text(embedding=image_embedding, topk=topk, 
+                                                      group_by_listingId=group_by_listingId, 
+                                                      include_all_fields=include_all_fields,
+                                                      **filters)
+
+      if include_all_fields:
+        # strip out fields and store it separately in listing_info
+        listing_info = {}
+        for listing in listings_image_image + listings_image_text:
+          listing_info[listing['listingId']] = {k: v for k, v in listing.items() if k not in ['listingId', 'agg_score', 'remarks', 'image_names', 'image_name', 'embeddingType']}
+          for key in list(listing.keys()):
+            if key not in ['listingId', 'agg_score', 'remarks', 'image_names', 'remark_chunk_ids']:
+              del listing[key]
 
       if group_by_listingId:        
         listings_image_image = self.normalize_scores(listings_image_image, 'agg_score')
@@ -368,8 +396,22 @@ class RedisDataStore:
         text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()   # list[float]
         text_embedding = np.array(text_features, dtype=np.float64).tobytes()
 
-      listings_text_image = self._search_text_2_image(embedding=text_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)    
-      listings_text_text = self._search_text_2_text(embedding=text_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
+      listings_text_image = self._search_text_2_image(embedding=text_embedding, topk=topk, 
+                                                      group_by_listingId=group_by_listingId, 
+                                                      include_all_fields=include_all_fields,
+                                                      **filters)
+      listings_text_text = self._search_text_2_text(embedding=text_embedding, topk=topk, 
+                                                    group_by_listingId=group_by_listingId,
+                                                    include_all_fields=include_all_fields,
+                                                    **filters)
+
+      if include_all_fields:
+        # strip out fields and store it separately in listing_info
+        for listing in listings_text_image + listings_text_text:
+          listing_info[listing['listingId']] = {k: v for k, v in listing.items() if k not in ['listingId', 'agg_score', 'remarks', 'image_names', 'image_name', 'embeddingType']}
+          for key in list(listing.keys()):
+            if key not in ['listingId', 'agg_score', 'remarks', 'image_names', 'remark_chunk_ids']:
+              del listing[key]
 
       if group_by_listingId:
         listings_text_image = self.normalize_scores(listings_text_image, 'agg_score')
@@ -391,7 +433,13 @@ class RedisDataStore:
 
     if group_by_listingId:
       combined_results.sort(key=lambda x: x['agg_score'], reverse=True)
-      return combined_results
+      if not include_all_fields:
+        return combined_results
+      else:
+        # for each result, add the stripped out fields
+        for result in combined_results:
+          result.update(listing_info[result['listingId']])
+        return combined_results
     else:
       # sort tuples by score in descending order
       top_item_names, top_scores = zip(*sorted(zip(top_item_names, top_scores), key=lambda x: x[1], reverse=True))

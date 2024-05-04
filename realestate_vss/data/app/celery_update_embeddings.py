@@ -13,7 +13,7 @@ import realestate_core.common.class_extensions
 from realestate_core.common.utils import join_df
 from realestate_vss.data.index import FaissIndex
 from realestate_vss.data.es_client import ESClient
-from realestate_vss.data.datastore import RedisDataStore
+from realestate_vss.data.redis_datastore import RedisDataStore
 
 from dotenv import load_dotenv, find_dotenv
 

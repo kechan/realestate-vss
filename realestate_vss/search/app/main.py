@@ -67,7 +67,7 @@ else:
 
 if use_redis:
   import redis
-  from realestate_vss.data.datastore import RedisDataStore
+  from realestate_vss.data.redis_datastore import RedisDataStore
 
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'

@@ -513,6 +513,7 @@ class ListingSearchEngine:
         sorted_image_names = sorted(max_scores, key=max_scores.get, reverse=True)
         return sorted_image_names, [max_scores[name] for name in sorted_image_names]
 
+  # ---------------------------------------------------------
 
   # these _search_* methods should be common interface with RedisDataStore
   def _groupy_listing(self, top_image_names: List[str], scores: List[float], include_all_fields=False):    
