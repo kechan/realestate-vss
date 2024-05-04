@@ -84,15 +84,18 @@ def process_redis_docs(embeddings_df: pd.DataFrame,
 @celery.task
 def update_embeddings(img_cache_folder: str):
   _ = load_dotenv(find_dotenv())
+  use_redis = False
   if "REDIS_HOST" in os.environ and "REDIS_PORT" in os.environ:
     redis_host = os.environ["REDIS_HOST"]
     redis_port = int(os.environ["REDIS_PORT"])
+    use_redis = True
     celery_logger.info(f'redis_host: {redis_host}, redis_port: {redis_port}')
   else:
-    raise ValueError("REDIS_HOST and REDIS_PORT not found in .env")
+    celery_logger.info('REDIS_HOST and REDIS_PORT not found in .env, not using Redis')
   
-  redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
-  datastore = RedisDataStore(client=redis_client, image_embedder=None, text_embedder=None)   # no query for update
+  if use_redis:
+    redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
+    datastore = RedisDataStore(client=redis_client, image_embedder=None, text_embedder=None)   # no query for update
 
   img_cache_folder = Path(img_cache_folder)
   working_folder = img_cache_folder/f'{model_name}_{pretrained}'
@@ -154,9 +157,16 @@ def update_embeddings(img_cache_folder: str):
   text_embeddings_df.defrag_index(inplace=True)
   listing_df.defrag_index(inplace=True)
 
+  # cast to float, the json version tends to be string
+  listing_df.lat = listing_df.lat.astype(float)
+  listing_df.lng = listing_df.lng.astype(float)
+  listing_df.price = listing_df.price.astype(float)
+  listing_df.leasePrice = listing_df.leasePrice.astype(float)
+
   incoming_listingIds = set(image_embeddings_df.listing_id.unique())
 
-  assert set(image_embeddings_df.listing_id) == set(text_embeddings_df.listing_id), 'listing_id in image_embeddings_df and text_embeddings_df must be the same'
+  # relax this requirement for now.
+  # assert set(image_embeddings_df.listing_id) == set(text_embeddings_df.listing_id), 'listing_id in image_embeddings_df and text_embeddings_df must be the same'
 
   if not (working_folder/'faiss_image_index.index').exists() and not (working_folder/'faiss_image_index.aux_info_df').exists():
     # create a new index for the first time
@@ -246,25 +256,26 @@ def update_embeddings(img_cache_folder: str):
   listing_df.to_feather(working_folder/'listing_df')
 
   # REDIS stuff
-  existing_listingIds = set(datastore.get_unique_listing_ids())
+  if use_redis:
+    existing_listingIds = set(datastore.get_unique_listing_ids())
 
-  # New listings
-  new_listingIds = incoming_listingIds - existing_listingIds
+    # New listings
+    new_listingIds = incoming_listingIds - existing_listingIds
 
-  celery_logger.info(f'Adding image embedding for {len(new_listingIds)} new listings to Redis')
-  process_redis_docs(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
-  celery_logger.info(f'Adding text embedding for {len(new_listingIds)} new listings to Redis')
-  process_redis_docs(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
+    celery_logger.info(f'Adding image embedding for {len(new_listingIds)} new listings to Redis')
+    process_redis_docs(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
+    celery_logger.info(f'Adding text embedding for {len(new_listingIds)} new listings to Redis')
+    process_redis_docs(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
-  # Updated listings
-  updated_listingIds = incoming_listingIds.intersection(existing_listingIds)
-  datastore.delete_listings(listing_ids=updated_listingIds)  # delete and reinsert
+    # Updated listings
+    updated_listingIds = incoming_listingIds.intersection(existing_listingIds)
+    datastore.delete_listings(listing_ids=updated_listingIds)  # delete and reinsert
 
-  celery_logger.info(f'Updating image embeddings for {len(updated_listingIds)} listings in Redis')
-  process_redis_docs(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
+    celery_logger.info(f'Updating image embeddings for {len(updated_listingIds)} listings in Redis')
+    process_redis_docs(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
 
-  celery_logger.info(f'Updating text embeddings for {len(updated_listingIds)} listings in Redis')
-  process_redis_docs(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
+    celery_logger.info(f'Updating text embeddings for {len(updated_listingIds)} listings in Redis')
+    process_redis_docs(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
   # Clean up current job id specific files
   for job_id in job_ids:

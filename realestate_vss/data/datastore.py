@@ -87,7 +87,10 @@ class RedisDataStore:
 
   def get(self, listing_id: Optional[str] = None, obj_id: Optional[str] = None, embedding_type='I') -> Optional[Union[Dict, List[Dict]]]:
     """
-    Retrieve a specific event from the index
+    Retrieve a specific item from Redis based on the listing_id, obj_id and embedding_type.
+    If listing_id is None, retrieve all items.
+    If obj_id is None, retrieve all items for the given listing_id.
+    embedding_type: 'I' for image, 'T' for text.
     """
     doc_prefix = self.image_prefix if embedding_type == 'I' else self.text_prefix
     try:
@@ -212,16 +215,7 @@ class RedisDataStore:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
 
     if group_by_listingId:
-      listings = self._image_search_groupby_listing(top_image_names, top_scores)
-      # Sort the listings by average score in descending order
-      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-
-      for listing in listings:
-        listing['remarks'] = listing_remarks[listing['listingId']]
-        if include_all_fields:
-          listing.update(all_json_fields[listing['listingId']])
-
-      return listings                    
+      return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
 
     return top_image_names, top_scores
   
@@ -256,17 +250,7 @@ class RedisDataStore:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
 
     if group_by_listingId:
-      listings = self._text_search_groupby_listing(top_remark_chunk_ids, top_scores)
-      # Sort the listings by average score in descending order
-      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-
-      for listing in listings:
-        listing['image_names'] = []    # no image names for text search, but keep response more consistent
-        listing['remarks'] = listing_remarks[listing['listingId']]
-        if include_all_fields:
-          listing.update(all_json_fields[listing['listingId']])
-
-      return listings
+      return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
     
     return top_remark_chunk_ids, top_scores
   
@@ -302,16 +286,7 @@ class RedisDataStore:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
 
     if group_by_listingId:
-      listings = self._image_search_groupby_listing(top_image_names, top_scores)
-      # Sort the listings by average score in descending order
-      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-
-      for listing in listings:
-        listing['remarks'] = listing_remarks[listing['listingId']]
-        if include_all_fields:
-          listing.update(all_json_fields[listing['listingId']])
-
-      return listings
+      return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
     
     return top_image_names, top_scores
 
@@ -346,17 +321,7 @@ class RedisDataStore:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
 
     if group_by_listingId:
-      listings = self._text_search_groupby_listing(top_remark_chunk_ids, top_scores)
-      # Sort the listings by average score in descending order
-      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-
-      for listing in listings:
-        listing['image_names'] = []    # no image names for text search, but keep response more consistent
-        listing['remarks'] = listing_remarks[listing['listingId']]
-        if include_all_fields:
-          listing.update(all_json_fields[listing['listingId']])
-
-      return listings
+      return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
     
     return top_remark_chunk_ids, top_scores
 
@@ -735,7 +700,12 @@ class RedisDataStore:
     else:
       return None # Unsupported field type
   
-  def _image_search_groupby_listing(self, image_names: List[str], scores: List[float]) -> List[Dict[str, Union[str, float, List[str]]]]:
+  def _image_search_groupby_listing(self, 
+                                    image_names: List[str], 
+                                    scores: List[float],
+                                    include_all_fields: bool = False,
+                                    all_json_fields: Dict[str, Any] = None
+                                    ) -> List[Dict[str, Union[str, float, List[str]]]]:
     """
     Given a list of image names and their scores, generate a list of listings with the aggregated score and image names for that listing
 
@@ -771,9 +741,21 @@ class RedisDataStore:
         "image_names": image_names,
       })
 
+    listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
+
+    for listing in listings:
+      listing['remarks'] = all_json_fields[listing['listingId']]['remarks']
+      if include_all_fields:
+        listing.update(all_json_fields[listing['listingId']])
+
     return listings
 
-  def _text_search_groupby_listing(self, remark_chunk_ids: List[str], scores: List[float]) -> List[Dict[str, Union[str, float, List[str]]]]:
+  def _text_search_groupby_listing(self, 
+                                   remark_chunk_ids: List[str], 
+                                   scores: List[float],
+                                   include_all_fields: bool = False,
+                                   all_json_fields: Dict[str, Any] = None
+                                   ) -> List[Dict[str, Union[str, float, List[str]]]]:
       """
       Given a list of remark chunk IDs and their scores, generate a list of listings with the aggregated score and remark chunk IDs for that listing.
 
@@ -806,6 +788,15 @@ class RedisDataStore:
           "agg_score": float(agg_score),
           "remark_chunk_ids": remark_chunk_ids,
         })
+
+      # Sort the listings by average score in descending order
+      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
+
+      for listing in listings:
+        listing['image_names'] = []    # no image names for text search, but keep response more consistent
+        listing['remarks'] = all_json_fields[listing['listingId']]['remarks']
+        if include_all_fields:
+          listing.update(all_json_fields[listing['listingId']])
 
       return listings
 

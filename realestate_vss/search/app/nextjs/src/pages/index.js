@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import Tooltip from '@material-ui/core/Tooltip';
 
 import TextSearch from './TextSearch';
@@ -73,6 +74,40 @@ export default function Home({ bannerHeight}) {
   //   localStorage.setItem('selectedFileUrls', JSON.stringify(selectedFileUrls));
   //   }
   // }, [selectedFileUrls]);
+
+  // maintain the scroll position when navigating back from detail page
+  const router = useRouter();
+
+  useEffect(() => {
+    const handleRouteChangeStart = () => {
+      sessionStorage.setItem('scrollPosition', window.scrollY);
+      // console.log('saving scrollPosition:', window.scrollY);
+    };
+
+    const restoreScroll = () => {
+      const savedPosition = sessionStorage.getItem('scrollPosition');      
+      if (savedPosition) {
+        setTimeout(() => {
+          window.scrollTo(0, parseInt(savedPosition, 10));
+          // console.log('scrolling to:', parseInt(savedPosition, 10));
+        }, 100); // Adjust delay as needed
+      }
+    };    
+
+    router.events.on('routeChangeStart', handleRouteChangeStart);
+    router.events.on('routeChangeComplete', restoreScroll);
+
+    // Restore scroll position if coming from the back navigation
+    if (window.history.action === 'POP') {
+      restoreScroll();
+    }
+
+    return () => {
+      router.events.off('routeChangeStart', handleRouteChangeStart);
+      router.events.off('routeChangeComplete', restoreScroll);
+    };
+  }, [router.events]);
+
 
 
   const handleFileChange = (files) => {

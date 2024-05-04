@@ -15,7 +15,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
 
   const [snackbarOpen, setSnackbarOpen] = useState(false);
 
-  const [isDisabled, setIsDisabled] = useState(true);   // set to true for temp demo
+  const [isDisabled, setIsDisabled] = useState(false);   // set to true for temp demo
 
   useEffect(() => {
     // Ensure this code runs only in the client-side environment

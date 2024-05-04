@@ -513,44 +513,32 @@ class ListingSearchEngine:
         sorted_image_names = sorted(max_scores, key=max_scores.get, reverse=True)
         return sorted_image_names, [max_scores[name] for name in sorted_image_names]
 
-  # these series of search methods are following quite closely whats done over in RedisDataStore
-  def _search_image_2_image(self, image: Image.Image = None, embedding: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
-    if embedding is None:
-      embedding = self.image_embedder.embed_from_single_image(image)
 
-    scores, top_image_names = self._query_faiss_index(self.faiss_image_index, embedding, topk=topk)
-    if group_by_listingId:
-      listings = self._gen_listings_from_image_search(top_image_names, scores)
-      for listing in listings:
-        listingId = listing['listingId']
-        listing_info = self.listing_df.q("jumpId == @listingId")
-        if len(listing_info) > 0:
-          if include_all_fields:
-            # convert all values to strings
-            listing_info = {k: str(v) for k, v in listing_info.iloc[0].items()}
-            listing.update(listing_info)
-            del listing['jumpId']
-          else:
-            remarks = listing_info.iloc[0].remarks
-            listing['remarks'] = remarks if remarks is not None else ''
+  # these _search_* methods should be common interface with RedisDataStore
+  def _groupy_listing(self, top_image_names: List[str], scores: List[float], include_all_fields=False):    
+    listings = self._gen_listings_from_image_search(top_image_names, scores)
+    for listing in listings:
+      listingId = listing['listingId']
+      listing_info = self.listing_df.q("jumpId == @listingId")  # find auxiliary info from listing_df for remarks and other attributes
+      if len(listing_info) > 0:
+        if include_all_fields:
+          # convert all values to strings
+          listing_info = {k: str(v) for k, v in listing_info.iloc[0].items()}
+          listing.update(listing_info)
+          del listing['jumpId']
         else:
-          listing['remarks'] = ''
+          remarks = listing_info.iloc[0].remarks
+          listing['remarks'] = remarks if remarks is not None else ''
+      else:
+        listing['remarks'] = ''
 
-      # Sort the listings by agg score in descending order
-      listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-      return listings
-    
-    return top_image_names, scores
-  
-  def _search_image_2_text(self, image: Image.Image = None, embedding: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
-    if embedding is None:
-      embedding = self.image_embedder.embed_from_single_image(image)
+    # Sort the listings by agg score in descending order
+    listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
+    return listings
 
-    scores, top_listingIds = self._query_faiss_index(self.faiss_text_index, embedding, topk=topk)
-    if not group_by_listingId:
-      return top_listingIds, scores
-    
+  def _groupby_listings_text_results(self, top_listingIds: List[str], scores: List[float], include_all_fields=False):
     listings_df = pd.DataFrame({'listingId': top_listingIds, 'score': scores})
+
     # the new text FaissIndex is such that stuff they index can be remark chunks, so listingId is not unique
     # we will need to group by listing_id and take the avg score 
     if self.score_aggregation_method == 'mean':
@@ -559,10 +547,10 @@ class ListingSearchEngine:
       listings_df = listings_df.groupby('listingId').score.max().reset_index()
     else:
       raise ValueError(f'Unknown score aggregation method {self.score_aggregation_method}')
-    
+
     # rename score to agg_score
     listings_df.rename(columns={'score': 'agg_score'}, inplace=True)
-    
+
     # sort by score in descending order
     listings_df.sort_values(by='agg_score', ascending=False, inplace=True)
 
@@ -573,7 +561,7 @@ class ListingSearchEngine:
       listings_df = listings_df.drop(columns=['embedding'])
 
     listings = listings_df.to_dict('records')
-    
+
     for listing in listings:
       listing['image_name'] = []
       listingId = listing['listingId']
@@ -593,6 +581,93 @@ class ListingSearchEngine:
     # Sort the listings by agg score in descending order
     listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
     return listings
+
+
+  def _search_image_2_image(self, image: Image.Image = None, embedding: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
+    if embedding is None:
+      embedding = self.image_embedder.embed_from_single_image(image)
+
+    scores, top_image_names = self._query_faiss_index(self.faiss_image_index, embedding, topk=topk)
+    if group_by_listingId:
+      return self._groupy_listing(top_image_names, scores, include_all_fields)      
+    
+    return top_image_names, scores
+  
+  # Multiple query images return corresponding topk image names and scores 
+  # Note that this is NOT the same as multi_image_search (where image vectors are aggregated and they are part of a single query)
+  # Here, each image corresponds to a separate query
+  # TODO: this should be refactored with _search_image_2_image
+  def _many_search_image_2_image(self, images: List[Image.Image] = None, embeddings: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
+    if embeddings is None:
+      embeddings = self.image_embedder.embed_from_images(images=images)
+    
+    scores, top_image_names = self._query_faiss_index(self.faiss_image_index, embeddings, topk=topk)
+    if group_by_listingId:
+      # scores is list of list, top_image_names is list of list, each list corresponds to each query image
+      listings = []
+      for scores_i, top_image_names_i in zip(scores, top_image_names):
+        listings.extend(self._groupy_listing(top_image_names_i, scores_i, include_all_fields))
+      return listings
+    else:
+      return top_image_names, scores
+
+
+  
+  def _search_image_2_text(self, image: Image.Image = None, embedding: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
+    if embedding is None:
+      embedding = self.image_embedder.embed_from_single_image(image)
+
+    scores, top_listingIds = self._query_faiss_index(self.faiss_text_index, embedding, topk=topk)
+    if group_by_listingId:
+      return self._groupby_listings_text_results(top_listingIds, scores, include_all_fields)
+    
+    return top_listingIds, scores
+    # if not group_by_listingId:
+    #   return top_listingIds, scores
+    
+    # listings_df = pd.DataFrame({'listingId': top_listingIds, 'score': scores})
+    # # the new text FaissIndex is such that stuff they index can be remark chunks, so listingId is not unique
+    # # we will need to group by listing_id and take the avg score 
+    # if self.score_aggregation_method == 'mean':
+    #   listings_df = listings_df.groupby('listingId').score.mean().reset_index()
+    # elif self.score_aggregation_method == 'max':
+    #   listings_df = listings_df.groupby('listingId').score.max().reset_index()
+    # else:
+    #   raise ValueError(f'Unknown score aggregation method {self.score_aggregation_method}')
+    
+    # # rename score to agg_score
+    # listings_df.rename(columns={'score': 'agg_score'}, inplace=True)
+    
+    # # sort by score in descending order
+    # listings_df.sort_values(by='agg_score', ascending=False, inplace=True)
+
+    # # remove jumpId and embedding columns from listings_df before returning the List[Dict]
+    # if 'jumpId' in listings_df.columns:
+    #   listings_df = listings_df.drop(columns=['jumpId'])
+    # if 'embedding' in listings_df.columns:
+    #   listings_df = listings_df.drop(columns=['embedding'])
+
+    # listings = listings_df.to_dict('records')
+    
+    # for listing in listings:
+    #   listing['image_name'] = []
+    #   listingId = listing['listingId']
+    #   listing_info = self.listing_df.q("jumpId == @listingId")
+    #   if len(listing_info) > 0:
+    #     if include_all_fields:
+    #       # convert all values to strings
+    #       listing_info = {k: str(v) for k, v in listing_info.iloc[0].items()}
+    #       listing.update(listing_info)
+    #       del listing['jumpId']
+    #     else:
+    #       remarks = listing_info.iloc[0].remarks
+    #       listing['remarks'] = remarks if remarks is not None else ''
+    #   else:
+    #     listing['remarks'] = ''
+
+    # # Sort the listings by agg score in descending order
+    # listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
+    # return listings
 
   def _search_text_2_image(self, phrase: str = None, embedding: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     if embedding is None:
@@ -602,78 +677,18 @@ class ListingSearchEngine:
     if not group_by_listingId:
       return top_image_names, scores
     
-    listings = self._gen_listings_from_image_search(top_image_names, scores)
-    for listing in listings:
-      listingId = listing['listingId']
-      listing_info = self.listing_df.q("jumpId == @listingId")
-      if len(listing_info) > 0:
-        if include_all_fields:
-          # convert all values to strings
-          listing_info = {k: str(v) for k, v in listing_info.iloc[0].items()}
-          listing.update(listing_info)
-          del listing['jumpId']
-        else:
-          remarks = listing_info.iloc[0].remarks
-          listing['remarks'] = remarks if remarks is not None else ''
-      else:
-        listing['remarks'] = ''
-
-    # Sort the listings by agg score in descending order
-    listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-
-    return listings
+    return self._groupy_listing(top_image_names, scores, include_all_fields)
   
   def _search_text_2_text(self, phrase: str = None, embedding: np.ndarray = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     if embedding is None:
       embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)
     
     scores, top_listingIds = self._query_faiss_index(self.faiss_text_index, embedding, topk=topk)
-    if not group_by_listingId:
-      return top_listingIds, scores
+    if group_by_listingId:
+      return self._groupby_listings_text_results(top_listingIds, scores, include_all_fields)
     
-    listings_df = pd.DataFrame({'listingId': top_listingIds, 'score': scores})
-    # the new text FaissIndex is such that stuff they index can be remark chunks, so listingId is not unique
-    # we will need to group by listing_id and take the avg score 
-    if self.score_aggregation_method == 'mean':
-      listings_df = listings_df.groupby('listingId').score.mean().reset_index()
-    elif self.score_aggregation_method == 'max':
-      listings_df = listings_df.groupby('listingId').score.max().reset_index()
-    else:
-      raise ValueError(f'Unknown score aggregation method {self.score_aggregation_method}')
-
-    # rename score to agg_score
-    listings_df.rename(columns={'score': 'agg_score'}, inplace=True)
-
-    # sort by score in descending order
-    listings_df.sort_values(by='agg_score', ascending=False, inplace=True)
-
-    # remove jumpId and embedding columns from listings_df before returning the List[Dict]
-    if 'jumpId' in listings_df.columns:
-      listings_df = listings_df.drop(columns=['jumpId'])
-    if 'embedding' in listings_df.columns:
-      listings_df = listings_df.drop(columns=['embedding'])
-    
-    listings = listings_df.to_dict('records')
-
-    for listing in listings:
-      listing['image_name'] = []
-      listingId = listing['listingId']
-      listing_info = self.listing_df.q("jumpId == @listingId")
-      if len(listing_info) > 0:
-        if include_all_fields:
-          # convert all values to strings
-          listing_info = {k: str(v) for k, v in listing_info.iloc[0].items()}
-          listing.update(listing_info)
-          del listing['jumpId']
-        else:
-          remarks = listing_info.iloc[0].remarks
-          listing['remarks'] = remarks if remarks is not None else ''
-      else:
-        listing['remarks'] = ''
-
-    # Sort the listings by agg score in descending order
-    listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
-    return listings
+    return top_listingIds, scores
+   
 
   def search(self, 
              image: Image.Image = None,

@@ -467,7 +467,6 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
       
   return results
 
-
 @app.post("/text-to-image-search/")
 async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str]]]]:
   if search_engine is not None:
@@ -579,7 +578,6 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
 
 # class QueryModel(BaseModel):
 #   query: dict
-
 
 @app.post("/multi-image-search")
 async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)):

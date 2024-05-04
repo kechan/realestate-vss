@@ -162,9 +162,22 @@ class FaissIndex:
     scores, I = self.index.search(query_vectors, topK)
     # print(I)
 
-    tops = self.aux_info.iloc[I[0, :]][self.aux_key].values.tolist()
+    if query_vectors.shape[0] == 1:
+      tops = self.aux_info.iloc[I[0, :]][self.aux_key].values.tolist()
+      return tops, scores[0].tolist()
 
-    return tops, scores[0].tolist()
+     # Initialize lists to hold results
+    top_results = []
+    score_results = []
+
+    # Loop over each query vector's results
+    for i in range(query_vectors.shape[0]):
+        # Get top results and scores for this query vector
+        tops = self.aux_info.iloc[I[i, :]][self.aux_key].values.tolist()
+        top_results.append(tops)
+        score_results.append(scores[i].tolist())
+
+    return top_results, score_results
   
   def save(self, filepath: Path):
     filepath = str(filepath) 

@@ -10,7 +10,7 @@ import pandas as pd
 from dotenv import load_dotenv, find_dotenv
 
 from celery_unstack import unstack
-from celery_embed import embed_listings, embed_listings_from_avm
+from celery_embed import embed_listings, embed_listings_from_avm, remove_all_embed_listings_task_ids
 from celery_update_embeddings import update_embeddings, update_inactive_embeddings
 
 # use this to establish a public endpt for image tagging service pipeline to upload image to
@@ -75,7 +75,7 @@ async def submit(
   return JSONResponse(content={"message": f"file {file.filename} saved with metadata."})
 
 @app.post("/submit_listing_jsons/")
-async def submit_listing_jsons(body: bytes = Body(...)):
+async def submit_listing_jsons(body: bytes = Body(...), start_date: Optional[str] = None, end_date: Optional[str] = None):
   """
   Submission of listing jsons in gzip format. For now, they come from data dump from the AVM monitoring service.
   """
@@ -85,13 +85,20 @@ async def submit_listing_jsons(body: bytes = Body(...)):
     json_data: List[Dict[str, Any]] = json.loads(decompressed_data)
 
     # print(type(json_data[0]['propertyFeatures']))
-
-    embed_listings_from_avm.apply_async(args=[json_data], queue='embed_queue')
+    # start_date = '2024-03-25'
+    # end_date = None
+    print(f"start_date: {start_date}, end_date: {end_date}")
+    embed_listings_from_avm.apply_async(args=[str(img_cache_folder), json_data, start_date, end_date], queue='embed_queue')
       
     return {"message": "Data processed successfully", "received_records": len(json_data)}
   except Exception as e:
     raise HTTPException(status_code=400, detail=f"Error processing data: {str(e)}")
 
+@app.get("/remove_all_embed_listings_task_id")
+async def remove_all_embed_listings_task_id():
+  remove_all_embed_listings_task_ids.apply_async(args=[], queue='embed_queue')
+
+  return JSONResponse(content={"message": "Removing all embed listings task ids from Redis."})
 
 @app.get("/embed")
 async def embed():
