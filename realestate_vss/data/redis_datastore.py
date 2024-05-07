@@ -166,6 +166,8 @@ class RedisDataStore:
       print(f"Error inserting data into Redis: {e}")
 
   def batch_insert(self, listings: List[Dict], batch_size=10000, embedding_type: str = 'I'):
+    # TODO: should try/except and log failures.
+    # And don't be blocked by occasional bad data.
     for i in tqdm(range(0, len(listings), batch_size), desc="Batch Insert Progress"):
       with self.client.pipeline(transaction=False) as pipe:
         for listing_json in listings[i:i+batch_size]:
@@ -510,6 +512,10 @@ class RedisDataStore:
       listing_json['embeddingType'] = 'I'
     else:
       listing_json['embeddingType'] = 'T'
+
+    # photos is not needed and its quite long, not needed.
+    if 'photos' in listing_json:
+      del listing_json['photos']
 
     return listing_json
   

@@ -20,6 +20,8 @@ from celery_update_embeddings import update_embeddings, update_inactive_embeddin
 # echo "weak-loops-prove.loca.lt" > non_ml_host
 # gsutil cp non_ml_host gs://ai-tests/tmp 
 
+# uvicorn data_collection_endpt:app --port 8005 --reload
+
 listing_fields = ['jumpId', 'city', 'provState', 'postalCode', 'lat', 'lng', 'streetName',
                   'beds', 'bedsInt', 'baths', 'bathsInt', 'sizeInterior',
                   'sizeInteriorUOM', 'lotSize', 'lotUOM', 'propertyFeatures',
