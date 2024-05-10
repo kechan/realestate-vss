@@ -12,6 +12,7 @@ class FaissIndex:
                embeddings: Optional[np.ndarray] = None, 
                aux_info: Optional[pd.DataFrame] = None, 
                aux_key: Optional[str] = None, 
+               display_key: Optional[str] = None,
                filepath: Optional[Path] = None,
                index_type: Optional[str] = 'FlatIP',
                **index_params):
@@ -107,6 +108,7 @@ class FaissIndex:
       # just be paranoid and do a defrag here, we don't want non contiguous index number
       self.aux_info.defrag_index(inplace=True)
       self.aux_key = aux_key
+      self.display_key = display_key
 
       # sanity check
       assert embeddings.shape[0] == aux_info.shape[0], 'embeddings and aux_info must have the same number of rows'    
@@ -146,7 +148,6 @@ class FaissIndex:
 
   def remove(self, items: List[str]):
     ids_to_remove = list(self.aux_info.q(f"{self.aux_key}.isin(@items)").index)
-    # print(f'removing {ids_to_remove}')
     self.index.remove_ids(np.array(ids_to_remove, dtype='int64'))
 
     # manage aux_info
@@ -154,7 +155,8 @@ class FaissIndex:
     self.aux_info.defrag_index(inplace=True)
 
   def update(self, embeddings: np.array, aux_info: pd.DataFrame):
-    items = list(aux_info[self.aux_key].values)
+    # items = list(aux_info[self.aux_key].values)
+    items = list(aux_info[self.aux_key].unique())
     self.remove(items)
     self.add(embeddings, aux_info)
 
@@ -163,7 +165,7 @@ class FaissIndex:
     # print(I)
 
     if query_vectors.shape[0] == 1:
-      tops = self.aux_info.iloc[I[0, :]][self.aux_key].values.tolist()
+      tops = self.aux_info.iloc[I[0, :]][self.display_key].values.tolist()
       return tops, scores[0].tolist()
 
      # Initialize lists to hold results
@@ -173,7 +175,7 @@ class FaissIndex:
     # Loop over each query vector's results
     for i in range(query_vectors.shape[0]):
         # Get top results and scores for this query vector
-        tops = self.aux_info.iloc[I[i, :]][self.aux_key].values.tolist()
+        tops = self.aux_info.iloc[I[i, :]][self.display_key].values.tolist()
         top_results.append(tops)
         score_results.append(scores[i].tolist())
 
@@ -183,9 +185,11 @@ class FaissIndex:
     filepath = str(filepath) 
     faiss.write_index(self.index, filepath + '.index')
     self.aux_info.to_feather(filepath + '.aux_info_df')
-    # save aux_key
+    # save aux_key and display_key
     with open(filepath + '.aux_key', 'w') as f:
       f.write(self.aux_key)
+    with open(filepath + '.display_key', 'w') as f:
+      f.write(self.display_key)
     # save index_type and index_params
     with open(filepath + '.index_type', 'w') as f:
       f.write(self.index_type)
@@ -200,6 +204,12 @@ class FaissIndex:
     # load aux_key
     with open(filepath + '.aux_key', 'r') as f:
       self.aux_key = f.read()
+    if Path(filepath + '.display_key').exists():
+      with open(filepath + '.display_key', 'r') as f:
+        self.display_key = f.read()
+    else:
+      self.display_key = self.aux_key
+
     # load index_type and index_params
     if Path(filepath + '.index_type').exists() and Path(filepath + '.index_params').exists():
       with open(filepath + '.index_type', 'r') as f:
@@ -231,7 +241,7 @@ class FaissIndex:
 
     try:
       wanted_listingIds = set(listing_df.q(query_str).jumpId.values)
-      unwanted_items = self.aux_info.q("~listing_id.isin(@wanted_listingIds)")[self.aux_key].values.tolist()
+      unwanted_items = self.aux_info.q("~listing_id.isin(@wanted_listingIds)")[self.aux_key].unique().tolist()
       self.remove(unwanted_items)
     except Exception as e:
       print(e)
@@ -299,6 +309,7 @@ class FaissIndex:
     new_index = FaissIndex(embeddings=reconstructed_embeddings, 
                            aux_info=self.aux_info, 
                            aux_key=self.aux_key,
+                           display_key=self.display_key,
                            index_type=index_type,
                            **index_params)
     
@@ -313,4 +324,7 @@ class FaissIndex:
     bytes_size = writer.data.size()    
     print(f"Approximate memory usage of the index: {bytes_size / 1024 / 1024:.2f} MB")
     return bytes_size / 1024 / 1024
+  
+  def get_embeddings(self):
+    return self.index.reconstruct_n(0, self.index.ntotal)
 

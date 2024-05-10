@@ -1,12 +1,20 @@
-from typing import Any, Tuple, List, Dict, Optional, Union
-import weaviate
+from typing import Any, Tuple, List, Dict, Optional, Union, Iterable
+import weaviate, uuid, math, gc
 from PIL import Image
 from datetime import datetime
+from dateutil import parser
 
 import numpy as np
+import pandas as pd
 
+from tqdm.auto import tqdm
+
+from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 from ..data.index import FaissIndex
+
+from weaviate.exceptions import ObjectAlreadyExistsException
+
 
 class WeaviateDataStore:
   def __init__(self, 
@@ -19,6 +27,9 @@ class WeaviateDataStore:
     self.image_embedder = image_embedder
     self.text_embedder = text_embedder
     self.score_aggregation_method = score_aggregation_method
+
+    self.doc_prefix = 'listing'
+    self.custom_uuid_namespace = uuid.uuid5(uuid.NAMESPACE_DNS, 'jumptools.com')
 
     self.all_properties = [
       'listing_id', # Identifiers
@@ -83,12 +94,26 @@ class WeaviateDataStore:
         {"name": "image_name", "dataType": ["string"]}
       ],
       "vectorIndexType": "hnsw",
+      "vectorIndexConfig": {
+          "skip": False,
+          "cleanupIntervalSeconds": 300,
+          "pq": {"enabled": False},
+          "maxConnections": 64,
+          "efConstruction": 128,
+          "ef": -1,
+          "dynamicEfMin": 100,
+          "dynamicEfMax": 500,
+          "dynamicEfFactor": 8,
+          "vectorCacheMaxObjects": 2000000,
+          "flatSearchCutoff": 40000,
+          "distance": "cosine"
+      },
       "invertedIndexConfig": {
         "stopwords": {"additions": [], "preset": "none", "removals": []}
       }
     }
 
-    # Object corresponding to a text embedding of a listing
+    # Object corresponding to a text embedding of a listing, reuse same properties except replace image_name with remark_chunk_id
     listing_text_schema = {
       "class": "Listing_Text",
       "vectorizer": "none",
@@ -96,6 +121,20 @@ class WeaviateDataStore:
         prop if prop['name'] != 'image_name' else {'name': 'remark_chunk_id', 'dataType': ['string']} for prop in listing_image_schema['properties']
       ],
       "vectorIndexType": "hnsw",
+      "vectorIndexConfig": {
+          "skip": False,
+          "cleanupIntervalSeconds": 300,
+          "pq": {"enabled": False},
+          "maxConnections": 64,
+          "efConstruction": 128,
+          "ef": -1,
+          "dynamicEfMin": 100,
+          "dynamicEfMax": 500,
+          "dynamicEfFactor": 8,
+          "vectorCacheMaxObjects": 2000000,
+          "flatSearchCutoff": 40000,
+          "distance": "cosine"
+      },
       "invertedIndexConfig": listing_image_schema['invertedIndexConfig']
     }
 
@@ -109,42 +148,91 @@ class WeaviateDataStore:
 
   def delete_all(self):
     self.client.schema.delete_all()
+
+  def delete_listing(self, listing_id: str):
+    """
+    Delete all objects related to a listing_id.
+    """
+    listing_images = self.get(listing_id, embedding_type='I')  # image embeddings
+    listing_texts = self.get(listing_id, embedding_type='T')   # text embeddings
+
+    for listing in listing_images:
+      self._delete_object_by_uuid(listing['uuid'], 'Listing_Image')
+
+    for listing in listing_texts:
+      self._delete_object_by_uuid(listing['uuid'], 'Listing_Text')
+
+  def count_all(self) -> int:
+    # count both Listing_Image and Listing_Text
+    count_listing_image = self._count_by_class_name("Listing_Image")
+    count_listing_text = self._count_by_class_name("Listing_Text")
+    return count_listing_image + count_listing_text
  
   def get(self, listing_id: Optional[str] = None, embedding_type: str = 'I'):
     """
-    Retrieve a specific item from Weaviate based on the listing_id and embedding_type.
+    Retrieve items from Weaviate related to listing_id and embedding_type.
     If listing_id is None, retrieve all items.
     embedding_type: 'I' for image, 'T' for text.
     """
 
+    limit = 1000
+    offset = 0
+
     class_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     extra_properties = ['image_name'] if embedding_type == 'I' else ['remark_chunk_id']
-
-    # Initialize the query
-    query = self.client.query.get(
-      class_name=class_name,
-      properties=self.all_properties + extra_properties
-    ).with_additional(["id"])
+    additionals = ["id", "vector"]
     
-    # Add the where filter only if a listing_id is provided
-    if listing_id is not None:
-      query = query.with_where({
-        "operator": "Equal",
-        "path": ["listing_id"],
-        "valueText": listing_id
-      })
-    
-    _results = query.do()
-
     results = []
-    for result in _results['data']['Get'][class_name]:
-      result['uuid'] = result['_additional']['id']
-      del result['_additional']
-      result = self._postprocess_listing_json(result)
-      results.append(result)
+    while True:
+      query = self.client.query.get(
+        class_name=class_name,
+        properties=self.all_properties + extra_properties
+      ).with_additional(additionals).with_limit(limit).with_offset(offset)
+      
+      # Add the where filter only if a listing_id is provided
+      if listing_id is not None:
+        query = query.with_where({
+          "operator": "Equal",
+          "path": ["listing_id"],
+          "valueText": listing_id
+        })
+      
+      _results = query.do()
+
+      if not _results['data']['Get'][class_name]:
+        break  # Exit loop if no more records are returned
+      
+      for result in _results['data']['Get'][class_name]:
+        result['uuid'] = result['_additional']['id']
+        result['embedding'] = result['_additional']['vector']
+
+        del result['_additional']
+
+        result = self._postprocess_listing_json(result)
+        results.append(result)
+
+      offset += limit
 
     return results
     
+  def _create_key(self, listing_json: Dict, embedding_type: str = 'I') -> str:
+    """
+    Create a key for a listing document based on the listing_json.
+    """
+    if 'image_name' in listing_json.keys() and 'remark_chunk_id' in listing_json.keys():
+      raise ValueError("Both 'image_name' and 'remark_chunk_id' should not be present at the same time since the vector is either an image embedding or text embedding.")
+
+    if embedding_type == 'I' and 'image_name' in listing_json.keys() and listing_json['image_name'] is not None:
+      key = f"{self.doc_prefix}:{listing_json['listing_id']}:{listing_json['image_name']}"
+    elif embedding_type == 'T' and 'remark_chunk_id' in listing_json.keys() and listing_json['remark_chunk_id'] is not None:
+      key = f"{self.doc_prefix}:{listing_json['listing_id']}:{listing_json['remark_chunk_id']}"
+    else:
+      # Fallback Redis key if neither is provided
+      key = f"{self.doc_prefix}:{listing_json['listing_id']}"
+
+    unique_uuid = uuid.uuid5(self.custom_uuid_namespace, key)
+
+    return unique_uuid
 
   def insert(self, listing_json: Dict, embedding_type: str = 'I'):
     '''
@@ -153,55 +241,195 @@ class WeaviateDataStore:
     class_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
 
     listing_json = self._preprocess_listing_json(listing_json)
+    key = self._create_key(listing_json, embedding_type)
 
-    # TODO: for dev only, remove later
-    # vector = [0.1, 0.2, 0.3, 0.4, 0.5]  
-    # create a random normalized vector of dim = 5
-    vector = np.random.randn(5)
-    vector = vector / np.linalg.norm(vector)
+    if not 'embedding' in listing_json or listing_json['embedding'] is None or len(listing_json['embedding']) == 0:
+      raise ValueError("The listing_json must contain an 'embedding' field with a non-empty vector.")
 
-    uuid = self.client.data_object.create(
-        data_object=listing_json,
-        class_name=class_name,
-        vector=vector
-    )
+    try:
+      uuid = self.client.data_object.create(
+          data_object=listing_json,
+          class_name=class_name,
+          vector=listing_json['embedding'],
+          uuid=key
+      )
+      return uuid
+    except ObjectAlreadyExistsException as e:
+      # TODO: log this instead
+      print(f"Object with UUID {key} already exists for listing_id {listing_json['listing_id']}.")
+      return None
+    
+  def upsert(self, listing_json: Dict, embedding_type: str = 'I'):
+    class_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
 
-    return uuid
+    listing_json = self._preprocess_listing_json(listing_json)
+    key = self._create_key(listing_json, embedding_type)
+
+    if not 'embedding' in listing_json or listing_json['embedding'] is None or len(listing_json['embedding']) == 0:
+        raise ValueError("The listing_json must contain an 'embedding' field with a non-empty vector.")    
   
-  def import_from_faiss_index(self, faiss_index: FaissIndex, listing_df: pd.DataFrame, embedding_type: str = 'I', sample_size: int = None):
+    try:
+      existing_object = self.client.data_object.get(uuid=key)
+      if existing_object:
+        self.client.data_object.update(
+            data_object=listing_json,
+            class_name=class_name,
+            uuid=key,
+            vector=listing_json['embedding']
+        )
+      else:
+        self.client.data_object.create(
+            data_object=listing_json,
+            class_name=class_name,
+            vector=listing_json['embedding'],
+            uuid=key
+        )
+      return key
+    except Exception as e:
+      print(f"Error upserting object: {e}")
+      return None
+  
+  
+  def batch_insert(self, listings: Iterable[Dict], batch_size=100, embedding_type: str = 'I'):
+    class_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
+
+    with self.client.batch.configure(batch_size=batch_size) as batch:
+      for listing_json in tqdm(listings):
+        listing_json = self._preprocess_listing_json(listing_json)
+        key = self._create_key(listing_json, embedding_type)
+
+        try:
+          batch.add_data_object(
+              data_object=listing_json,
+              class_name=class_name,
+              vector=listing_json['embedding'],
+              uuid=key
+          )
+        except ObjectAlreadyExistsException as e:
+          print(f"Object with UUID already exists: {e}")
+        except Exception as e:
+          print(listing_json)
+          print(f"Error inserting object: {e}")
+
+  def batch_upsert(self, listings: Iterable[Dict], batch_size=1000, embedding_type: str = 'I'):
+    """
+    Note this can be less inefficient due to the need to perform update in non batch manner
+    # TODO: need to investigate this
+    """
+    class_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
+
+    with self.client.batch.configure(batch_size=batch_size) as batch:
+      for listing_json in tqdm(listings):
+        listing_json = self._preprocess_listing_json(listing_json)
+        key = self._create_key(listing_json, embedding_type)
+
+        try:
+          # check if the object already exists
+          existing_object = self.client.data_object.get(uuid=key)
+          if existing_object:
+            self.client.data_object.update(
+                data_object=listing_json,
+                class_name=class_name,
+                uuid=key,
+                vector=listing_json['embedding']
+            )
+          else:
+            batch.add_data_object(
+                data_object=listing_json,
+                class_name=class_name,
+                vector=listing_json['embedding'],
+                uuid=key
+            )
+        except Exception as e:
+          print(f"Error upserting object: {e}")
+
+
+    
+    
+
+  def import_from_faiss_index(self, faiss_index: FaissIndex, listing_df: pd.DataFrame, embedding_type: str = 'I', offset: int = None, length: int = None):
     """
     Import data from a FaissIndex object into Weaviate. The listing_df must be 
     there to provide the necessary metadata for each listing.
     """
-    _embeddings = faiss_index.index.reconstruct_n(0, faiss_index.index.ntotal)
+    if offset is None and length is None:
+      _embeddings = faiss_index.index.reconstruct_n(0, faiss_index.index.ntotal)
+      _df = join_df(faiss_index.aux_info, listing_df, left_on='listing_id', right_on='jumpId', how='left')
+    else:
+      _embeddings = faiss_index.index.reconstruct_n(offset, length)
+      _df = join_df(faiss_index.aux_info.iloc[offset:offset+length], listing_df, left_on='listing_id', right_on='jumpId', how='left').iloc[offset:offset+length]
+    
+    _df.drop(columns=['jumpId'], inplace=True)
+    _df['embedding'] = [_embeddings[i] for i in range(_embeddings.shape[0])]
+
+    listing_jsons = _df.to_dict(orient='records')
+
+    self.batch_insert(listing_jsons, embedding_type=embedding_type)
+
+    del _embeddings
+    del _df
+    gc.collect();
 
 
+
+
+
+  def _convert_datestr_to_iso(self, date_str: str) -> str:
+    """
+    Convert a date string to 'YYYY-MM-DDTHH:MM:SSZ'
+    """
+    # return datetime.strptime(date_str, '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+      # Parse the datetime string
+      dt = parser.parse(date_str)
+      # Format it into the desired ISO 8601 format
+      formatted_date = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+      return formatted_date
+    except ValueError as e:
+      try:
+        return datetime.strptime(date_str, '%y-%m-%d:%H:%M:%S').strftime('%Y-%m-%dT%H:%M:%SZ')
+      except ValueError as e:
+        print(f"Error parsing date: {e}")
+        return None
+
+ 
   def _preprocess_listing_json(self, listing_json: Dict) -> Dict:
     """
     Perform necessary preprocessing on the listing json before storing it in the Weaviate database
     """
+    
+    if 'embedding' in listing_json and isinstance(listing_json['embedding'], np.ndarray):
+      listing_json['embedding'] = listing_json['embedding'].tolist()
+    
     if 'propertyFeatures' in listing_json and isinstance(listing_json['propertyFeatures'], (list, np.ndarray)):
       listing_json['propertyFeatures'] = ', '.join(listing_json['propertyFeatures'])
     
     # format the date correctly for weaviate
     if 'listingDate' in listing_json and isinstance(listing_json['listingDate'], str):
-      listing_json['listingDate'] = datetime.strptime(listing_json['listingDate'], '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+      # listing_json['listingDate'] = datetime.strptime(listing_json['listingDate'], '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+      listing_json['listingDate'] = self._convert_datestr_to_iso(listing_json['listingDate'])
     if 'lastUpdate' in listing_json and isinstance(listing_json['lastUpdate'], str):
-      listing_json['lastUpdate'] = datetime.strptime(listing_json['lastUpdate'], '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+      # listing_json['lastUpdate'] = datetime.strptime(listing_json['lastUpdate'], '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+      listing_json['lastUpdate'] = self._convert_datestr_to_iso(listing_json['lastUpdate'])
     if 'lastPhotoUpdate' in listing_json and isinstance(listing_json['lastPhotoUpdate'], str):
-      listing_json['lastPhotoUpdate'] = datetime.strptime(listing_json['lastPhotoUpdate'], '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+      # listing_json['lastPhotoUpdate'] = datetime.strptime(listing_json['lastPhotoUpdate'], '%Y/%m/%d').strftime('%Y-%m-%dT%H:%M:%SZ')
+      listing_json['lastPhotoUpdate'] = self._convert_datestr_to_iso(listing_json['lastPhotoUpdate'])
 
     if 'lat' in listing_json:
-      if np.isnan(listing_json['lat']):
-        listing_json['lat'] = None
-      elif isinstance(listing_json['lat'], str):
+      if isinstance(listing_json['lat'], str):
         listing_json['lat'] = float(listing_json['lat'])
+      if isinstance(listing_json['lat'], float) and math.isnan(listing_json['lat']):
+        listing_json['lat'] = None
     
     if 'lng' in listing_json:
-      if np.isnan(listing_json['lng']):
-        listing_json['lng'] = None
-      elif isinstance(listing_json['lng'], str):
+      if isinstance(listing_json['lng'], str):
         listing_json['lng'] = float(listing_json['lng'])
+      if isinstance(listing_json['lng'], float) and math.isnan(listing_json['lng']):
+        listing_json['lng'] = None
+
+    # photos is not needed and its quite long, not needed. its also np.ndarray
+    if 'photos' in listing_json:
+      del listing_json['photos']
 
     return listing_json
   
@@ -221,8 +449,27 @@ class WeaviateDataStore:
 
     return listing_json
       
+  def _delete_object_by_uuid(self, uuid, class_name):
+    try:
+      # Delete the object based on its UUID and class name
+      self.client.data_object.delete(
+        uuid=uuid,
+        class_name=class_name
+      )
+      print(f"Object with UUID {uuid} successfully deleted.")
+    except Exception as e:
+      print(f"Error deleting object with UUID {uuid}: {e}")
 
-
+  def _count_by_class_name(self, class_name) -> int:
+    try:
+      # Count the number of objects in the class
+      count = self.client.query.aggregate(
+        class_name=class_name
+      ).with_meta_count().do()
+      return count['data']['Aggregate'][class_name][0]['meta']['count']
+    except Exception as e:
+      print(f"Error counting objects in class {class_name}: {e}")
+      return None
 
 
 

@@ -32,7 +32,8 @@ def upsert_embeddings_to_faiss(embeddings_df: pd.DataFrame,
                                 listingIds: List[str], 
                                 faiss_index: FaissIndex, 
                                 operation: str, 
-                                aux_key: str) -> None:
+                                # aux_key: str
+                                ) -> None:
   """
   Function to add/update embeddings to faiss index.
 
@@ -45,15 +46,19 @@ def upsert_embeddings_to_faiss(embeddings_df: pd.DataFrame,
                 can also be thought of as the primary key to auxilliary information.
 
   """
-  items_to_process = list(embeddings_df.q("listing_id.isin(@listingIds)")[aux_key].values)
-  processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
-  aux_info = processed_embeddings_df.drop(columns=['embedding'])
-  embeddings = np.stack(processed_embeddings_df.embedding.values)
+  # items_to_process = list(embeddings_df.q("listing_id.isin(@listingIds)")[aux_key].values)
+  # processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
+  # aux_info = processed_embeddings_df.drop(columns=['embedding'])
+  # embeddings = np.stack(processed_embeddings_df.embedding.values)
+  sub_embeddings_df = embeddings_df.q("listing_id.isin(@listingIds)").copy()
+  sub_embeddings_df.defrag_index(inplace=True)
+  embeddings = np.stack(sub_embeddings_df.embedding.values)
+  sub_embeddings_df.drop(columns=['embedding'], inplace=True)
 
   if operation == 'add':
-    faiss_index.add(embeddings=embeddings, aux_info=aux_info)
+    faiss_index.add(embeddings=embeddings, aux_info=sub_embeddings_df)
   elif operation == 'update':
-    faiss_index.update(embeddings=embeddings, aux_info=aux_info)
+    faiss_index.update(embeddings=embeddings, aux_info=sub_embeddings_df)
   else:
     raise ValueError('operation must be either add or update')
 
@@ -116,6 +121,8 @@ def update_embeddings(img_cache_folder: str):
 
   # print(job_ids)
 
+  # Gather image, text embeddings and listing_df from all job_ids
+
   image_embeddings_df, listing_df = [], []
   text_embeddings_df = pd.DataFrame()
 
@@ -151,6 +158,7 @@ def update_embeddings(img_cache_folder: str):
   # dedup
   image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
   listing_df.drop_duplicates(subset=['jumpId'], keep='last', inplace=True)
+  text_embeddings_df.drop_duplicates(subset=['remark_chunk_id'], keep='last', inplace=True)
 
   # defrag (being paranoia, cos if this isnt so, it will have bad bugs in FAISS search downstream)
   image_embeddings_df.defrag_index(inplace=True)
@@ -173,12 +181,16 @@ def update_embeddings(img_cache_folder: str):
     image_aux_info = image_embeddings_df.drop(columns=['embedding'])
     faiss_image_index = FaissIndex(embeddings=np.stack(image_embeddings_df.embedding.values), 
                                   aux_info=image_aux_info, 
-                                  aux_key='image_name')
+                                  aux_key='listing_id',
+                                  display_key='image_name'
+                                  )
           
     text_aux_info = text_embeddings_df.drop(columns=['embedding'])
     faiss_text_index = FaissIndex(embeddings=np.stack(text_embeddings_df.embedding.values), 
                                   aux_info=text_aux_info, 
-                                  aux_key='listing_id')
+                                  aux_key='listing_id',
+                                  display_key='listing_id'
+                                  )
     
   else:
     # load the existing index
@@ -210,14 +222,16 @@ def update_embeddings(img_cache_folder: str):
                                   listingIds=new_listingIds, 
                                   faiss_index=faiss_image_index, 
                                   operation='add', 
-                                  aux_key='image_name')
+                                  # aux_key='image_name'
+                                  )
 
       # add new text embeddings
       upsert_embeddings_to_faiss(embeddings_df=text_embeddings_df, 
                                   listingIds=new_listingIds, 
                                   faiss_index=faiss_text_index, 
                                   operation='add', 
-                                  aux_key='remark_chunk_id')
+                                  # aux_key='remark_chunk_id'
+                                  )
 
     else:
       celery_logger.info('No new listings to add to index.')
@@ -231,14 +245,16 @@ def update_embeddings(img_cache_folder: str):
                                   listingIds=updated_listingIds,
                                   faiss_index=faiss_image_index,
                                   operation='update',
-                                  aux_key='image_name')
+                                  # aux_key='image_name'
+                                  )
 
       # update text embeddings
       upsert_embeddings_to_faiss(embeddings_df=text_embeddings_df,
                                   listingIds=updated_listingIds,
                                   faiss_index=faiss_text_index,
                                   operation='update',
-                                  aux_key='remark_chunk_id')
+                                  # aux_key='remark_chunk_id'
+                                  )
     else:
       celery_logger.info('No updated listings to update in index.')
 

@@ -47,14 +47,23 @@ def to_unix_timestamp(date_str: str) -> int:
 
   If the date string cannot be parsed as a valid date format, returns the current unix timestamp and prints a warning.
   """
+  if date_str is None: return None
+
   # Try to parse the date string using arrow, which supports many common date formats
   try:
     date_obj = arrow.get(date_str)
     return int(date_obj.timestamp())
   except arrow.parser.ParserError:
-    # If the parsing fails, return the current unix timestamp and print a warning
-    # logger.info(f"Invalid date format: {date_str}")
-    return int(arrow.now().timestamp())
+    try:
+      date_obj = datetime.strptime(date_str, "%y-%m-%d:%H:%M:%S")
+      return int(date_obj.timestamp())
+    except ValueError:
+      # If the parsing fails, return the current unix timestamp and print a warning
+      # logger.info(f"Invalid date format: {date_str}")
+
+      # during dev, lets just raise the error
+      # return int(arrow.now().timestamp())
+      raise ValueError(f"Invalid date format: {date_str}")
 
 def unpack_schema(d: dict):
   for v in d.values():
@@ -513,7 +522,7 @@ class RedisDataStore:
     else:
       listing_json['embeddingType'] = 'T'
 
-    # photos is not needed and its quite long, not needed.
+    # photos is not needed and its quite long, not needed. its also np ndarray
     if 'photos' in listing_json:
       del listing_json['photos']
 
@@ -584,7 +593,7 @@ class RedisDataStore:
 
     if sample_size is not None:
       _df = _df.sample(sample_size)
-      _df.defrag_index(drop=True)
+      _df.defrag_index(inplace=True)
 
     listing_jsons = _df.to_dict(orient='records')
 
