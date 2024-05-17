@@ -1,4 +1,5 @@
 from typing import Dict, List, Union, Tuple, Any, Optional
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -26,7 +27,7 @@ from dotenv import load_dotenv, find_dotenv
 from google.cloud import storage
 from google.auth.exceptions import DefaultCredentialsError
 
-app = FastAPI()
+# app = FastAPI()
 # uvicorn main:app --reload &  # run this in terminal to start the server
 # uvicorn main:app --host 0.0.0.0 --port 8002 --reload  (demo on GCP)
 
@@ -37,13 +38,6 @@ if "ALLOW_ORIGINS" in os.environ:
 else:
   raise Exception("ALLOW_ORIGINS environment variable not set in .env file")
 
-app.add_middleware(
-  CORSMiddleware,
-  allow_origins=allow_origins,  # Allows all origins
-  allow_credentials=True,
-  allow_methods=["*"],  # Allows all methods
-  allow_headers=["*"],  # Allows all headers
-)
 
 # Global variable to hold the search engine instance
 search_engine = None
@@ -69,6 +63,20 @@ if use_redis:
   import redis
   from realestate_vss.data.redis_datastore import RedisDataStore
 
+if "USE_WEAVIATE" in os.environ:
+  use_weaviate = (os.getenv("USE_WEAVIATE").lower() == 'true')
+  print(f'Using Weaviate: {use_weaviate}')
+  if use_weaviate:
+    WEAVIATE_HOST = os.getenv("WEAVIATE_HOST")
+    WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT"))
+    print(f'Using Weaviate server: {WEAVIATE_HOST}:{WEAVIATE_PORT}')
+else:
+  use_weaviate = False
+
+if use_weaviate:
+  import weaviate
+  from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
+
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
 
@@ -88,25 +96,32 @@ else:
   bucket = None
 
 # check if FAISS index folder is defined, if so, use FAISS index to later instantiate search engine
-# and not use the dataframes
-if "FAISS_IMAGE_INDEX" in os.environ and "FAISS_TEXT_INDEX" in os.environ and not use_redis:    # if redis is used, no need for FAISS index 
-  faiss_image_index_path = Path(os.getenv("FAISS_IMAGE_INDEX"))
-  # if not faiss_index_folder.is_dir():
-  #   raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
-  print(f'Using FAISS image index from {faiss_image_index_path}')
 
-  faiss_text_index_path = Path(os.getenv("FAISS_TEXT_INDEX"))
-  print(f'Using FAISS text index from {faiss_text_index_path}')
+if "USE_FAISS" in os.environ:
+  use_faiss = (os.getenv("USE_FAISS").lower() == 'true')
+  print(f'Using FAISS: {use_faiss}')
 else:
-  faiss_image_index_path = None
-  faiss_text_index_path = None
-  print('Not using FAISS index')
+  use_faiss = False
 
-if "LISTING_DF" in os.environ:
-  listing_df_path = Path(os.getenv("LISTING_DF"))
-  print(f'Using listing dataframe from {listing_df_path}')
-else:
-  listing_df_path = None
+if use_faiss:
+  if "FAISS_IMAGE_INDEX" in os.environ and "FAISS_TEXT_INDEX" in os.environ:
+    faiss_image_index_path = Path(os.getenv("FAISS_IMAGE_INDEX"))
+    # if not faiss_index_folder.is_dir():
+    #   raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
+    print(f'Using FAISS image index from {faiss_image_index_path}')
+
+    faiss_text_index_path = Path(os.getenv("FAISS_TEXT_INDEX"))
+    print(f'Using FAISS text index from {faiss_text_index_path}')
+  else:
+    faiss_image_index_path = None
+    faiss_text_index_path = None
+    print('Not using FAISS index')
+
+  if "LISTING_DF" in os.environ:
+    listing_df_path = Path(os.getenv("LISTING_DF"))
+    print(f'Using listing dataframe from {listing_df_path}')
+  else:
+    listing_df_path = None
 
 async def load_images_dataframe():
   loop = asyncio.get_event_loop()
@@ -193,7 +208,8 @@ async def load_listing_df():
 
   return listing_df
 
-@app.on_event("startup")
+
+# @app.on_event("startup")
 async def startup_event():
   global search_engine
   global datastore
@@ -211,7 +227,13 @@ async def startup_event():
     # redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
     redis_client = redis.Redis(connection_pool=pool)
     datastore = RedisDataStore(client=redis_client, image_embedder=image_embedder, text_embedder=text_embedder)
-  else:
+
+  elif use_weaviate:
+    client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
+    datastore = WeaviateDataStore(client=client, 
+                                  image_embedder=image_embedder, 
+                                  text_embedder=text_embedder)
+  elif use_faiss:
     if faiss_image_index_path is None:
       # Async retrieval of embeddings dataframes
       image_embeddings_df = await load_images_dataframe()
@@ -240,14 +262,41 @@ async def startup_event():
             listing_df=listing_df,
             score_aggregation_method='max'
             )
+      
+  else:
+    raise Exception("No datastore or search engine (using faiss) specified")
+
+async def shutdown_event():
+  if use_weaviate or use_redis:
+    datastore.client.close()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+  await startup_event()
+  try:
+    yield
+  finally:
+    await shutdown_event()
+
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+  CORSMiddleware,
+  allow_origins=allow_origins,  # Allows all origins
+  allow_credentials=True,
+  allow_methods=["*"],  # Allows all methods
+  allow_headers=["*"],  # Allows all headers
+)
+
 
 class ListingData(BaseModel):
-  jumpId: str
+  jumpId: Optional[str] = None
   city: str
   provState: str
-  postalCode: str
-  lat: float
-  lng: float
+  postalCode: Optional[str] = None
+  lat: Optional[float] = None
+  lng: Optional[float] = None
   streetName: Optional[str] = None
   beds: str
   bedsInt: int
@@ -261,7 +310,7 @@ class ListingData(BaseModel):
   propertyType: Optional[str] = None
   transactionType: str
   carriageTrade: bool
-  price: int
+  price: float
   leasePrice: int
   pool: bool
   garage: bool
@@ -270,18 +319,27 @@ class ListingData(BaseModel):
   ac: bool
   remarks: Optional[str] = None
   listing_id: str
+  listingId: Optional[str] = None
   photo: Optional[str] = None
   listingDate: Optional[str] = None
+  lastUpdate: Optional[str] = None
+  lastPhotoUpdate: Optional[str] = None
+  
+
+class ListingSearchResult(ListingData):
+  agg_score: float
+  image_names: Optional[List[str]] = None
+  remark_chunk_ids: Optional[List[str]] = None
 
 class PartialListingData(BaseModel):
-  jumpId: str
+  jumpId: Optional[str] = None
   image_name: Optional[str] = None
 
 @app.get("/listing/{listingId}")
 async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
-  if search_engine is not None:
+  if use_faiss:
     listing_data = search_engine.get_listing(listingId)
-  elif use_redis:
+  elif use_redis or use_weaviate:
     listing_data = datastore.get_listing(listingId)
 
   if not listing_data:
@@ -296,16 +354,17 @@ async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
 
 @app.get("/images/{listingId}")
 async def read_images(listingId: str) -> List[str]:
-  if search_engine is not None:
+  if use_faiss:
     image_names = search_engine.get_imagenames(listingId)
-  elif use_redis:
+  elif use_redis or use_weaviate:
     image_names = datastore.get_imagenames(listingId)
 
   image_names = [f"{listingId}/{image_name}" for image_name in image_names]
   return image_names
 
 @app.post("/search-by-image/")
-async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
+# async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
+async def search_by_image(file: UploadFile = File(...)) -> List[ListingSearchResult]:
     """
     Using the provided image file as query to the search engine, return a list of listings with images
     that are most similar to it.
@@ -349,15 +408,16 @@ async def search_by_image(file: UploadFile = File(...)) -> List[Dict[str, Union[
       return f'error: Invalid image file'
 
     try:
-      if search_engine is not None:
+      if use_faiss:
         # image_names, scores = search_engine.image_search(image, topk=50)
         listings = search_engine.image_search(image, topk=50, group_by_listingId=True)
-      elif use_redis:
-        listings = datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, **{})
+      elif use_redis or use_weaviate:
+        listings = datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
     except Exception as e:
       return f'Error: {e}'
 
     return listings
+
 
 @app.get("/images/{listingId}/{image_name}")
 async def get_image(listingId: str, image_name: str) -> FileResponse:
@@ -384,9 +444,9 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
     ext = Path(image_name).suffix
     image_name = f'{image_name_wo_ext}_lg{ext}'
 
-    if search_engine is not None:
+    if use_faiss:
       photo_url = 'https:' + str(Path(search_engine.get_listing(listingId)['photo']).parent) + '/' + image_name
-    elif use_redis:
+    elif use_redis or use_weaviate:
       photo_url = 'https:' + str(Path(datastore.get_listing(listingId)['photo']).parent) + '/' + image_name
 
     async with httpx.AsyncClient() as client:
@@ -431,6 +491,9 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
                          lambda_val: float = Query(0.8, description="Required if mode is SOFT_MATCH_AND_VSS."), 
                          alpha_val: float = Query(0.5, description="Required if mode is SOFT_MATCH_AND_VSS.")
 ):
+  """
+  Old
+  """
   if search_engine is not None:
   
     phrase = query.get('phrase', None)
@@ -467,26 +530,56 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
       
   return results
 
+@app.post("/text-to-text-search/")
+async def text_to_text_searcH(query: Dict[str, Any]) -> List[ListingSearchResult]:
+  phrase = query.get('phrase', None)
+  if phrase is not None:
+    del query['phrase']   # remove key phrase from query after extracting it
+
+  if use_faiss:
+    listings = search_engine._search_text_2_text(phrase=query['phrase'], topk=50, group_by_listingId=False, include_all_fields=False, **query)
+  elif use_redis:
+    # clean up query to conform to valid redis query
+    print(f'before cleanup: {query}')
+    query = cleanup_query_for_redis(query)
+    print(f'after cleanup: {query}')
+    listings = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+  elif use_weaviate:
+    listings = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+  
+  for listing in listings:
+    listing['listing_id'] = listing['listingId']
+
+  return listings
+
+
 @app.post("/text-to-image-search/")
-async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str]]]]:
-  if search_engine is not None:
+# async def text_to_image_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str]]]]:
+async def text_to_image_search(query: Dict[str, Any]) -> List[ListingSearchResult]:
+  phrase = query.get('phrase', None)
+  if phrase is not None:
+    del query['phrase']   # remove key phrase from query after extracting it
+
+  if use_faiss:
     try:
       # image_names, scores = search_engine.text_2_image_search(phrase=query['phrase'], topk=50)
-      listings = search_engine.text_2_image_search(phrase=query['phrase'], topk=50, group_by_listingId=True)
+      # listings = search_engine.text_2_image_search(phrase=query['phrase'], topk=50, group_by_listingId=True)
+      listings = search_engine._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     except Exception as e:
       return f'search engine error: {e}'
-  elif use_redis:    
-    phrase = query.get('phrase', None)
-    if phrase is not None:
-      del query['phrase']   # remove key phrase from query after extracting it
+  elif use_redis or use_weaviate:    
+    print(f'before cleanup: {query}')
+    query = cleanup_query_for_redis(query)
+    print(f'after cleanup: {query}')
 
     try:
-      listings = datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, **query)
+      listings = datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     except Exception as e:
       return f'search engine error: {e}'
 
   return listings
 
+'''
 @app.post("/text-to-image-text-search/")
 async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Union[str, float , List[str], str]]]:
   
@@ -504,10 +597,10 @@ async def text_to_image_text_search(query: Dict[str, Any]) -> List[Dict[str, Uni
     return f'Error: {e}'
   
   return listings
-
+'''
 
 @app.post("/image-to-text-search")
-async def image_2_text_search(file: UploadFile = File(...)):
+async def image_2_text_search(file: UploadFile = File(...)) -> List[ListingSearchResult]:
   
   image_data = await file.read()
 
@@ -517,15 +610,18 @@ async def image_2_text_search(file: UploadFile = File(...)):
     return f'error: Invalid image file'
 
   try:
-    if search_engine is not None:
-      listings = search_engine.image_2_text_search(image, topk=50)
-    elif use_redis:
+    if use_faiss:
+      # listings = search_engine.image_2_text_search(image, topk=50)
+      listings = search_engine._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+
+    elif use_redis or use_weaviate:
       listings = datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
   except Exception as e:
     return f'Error: {e}'
 
   return listings
 
+'''
 @app.post("/image-to-image-text-search")
 async def image_2_image_text_search(file: UploadFile = File(...)):
 
@@ -545,8 +641,9 @@ async def image_2_image_text_search(file: UploadFile = File(...)):
     return f'search engine error: {e}'
 
   return listings
+'''
 
-
+'''
 @app.post("/many-image-search")
 async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[str, Union[str, float , List[str]]]]:
   """
@@ -574,13 +671,13 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
     return f'search engine error: {e}'
 
   return listings
-
+'''
 
 # class QueryModel(BaseModel):
 #   query: dict
 
 @app.post("/multi-image-search")
-async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)):
+async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)) -> List[ListingSearchResult]:
   
   images: List[Image.Image] = []
   for file in files:
@@ -610,10 +707,10 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     query = {}
 
   try:
-    if search_engine is not None:
+    if use_faiss:
       listings = search_engine.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
-    else:
-      listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, **query)
+    elif use_redis or use_weaviate:
+      listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   except Exception as e:
     return f'Error: {e}'
   
@@ -621,7 +718,8 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
 
 @app.post("/search")
 # async def search(file: Optional[UploadFile] = None, query: Optional[Dict[str, Any]] = None):
-async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFile] = File(None)):
+# async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFile] = File(None)):
+async def search(query_body: Optional[str] = Form(None), file: UploadFile = None) -> List[ListingSearchResult]:
   """
   One search to rule them all (full cross modality)
 
@@ -644,9 +742,9 @@ async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFi
     try:
       query = json.loads(query_body)
       print(f'before cleanup: {query}')
-      if use_redis:
-        query = cleanup_query_for_redis(query)
-        print(f'after cleanup: {query}')
+      # if use_redis:
+      query = cleanup_query_for_redis(query)
+      print(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}."}
     
@@ -659,14 +757,15 @@ async def search(query_body: Optional[str] = Form(None), file: Optional[UploadFi
     query = {}
     
   try:
-    if search_engine is not None:
+    if use_faiss:
       listings = search_engine.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
-    else:
-      listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, **query)
+    elif use_redis or use_weaviate:
+      listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   except Exception as e:
     return f'Error: {e}'
   
   return listings
+
 
 
 # for testing before UI is built

@@ -8,6 +8,7 @@ export default function ImageSearchResults({ searchResults }) {
   const [selectedImage, setSelectedImage] = useState(null);
   const [remarksModalVisible, setRemarksModalVisible] = useState(false);
   const [selectedRemarks, setSelectedRemarks] = useState(null);
+  // const [remarks, setRemarks] = useState('');
   const modalRef = useRef();
 
   const openModal = (image) => {
@@ -19,13 +20,35 @@ export default function ImageSearchResults({ searchResults }) {
     setModalVisible(false);
   };
 
-  const openRemarksModal = (remarks) => {
-    setSelectedRemarks(remarks);
+  // const openRemarksModal = (remarks) => {
+  //   setSelectedRemarks(remarks);
+  //   setRemarksModalVisible(true);
+  // };
+
+  const openRemarksModal = async (listingId, existingRemarks) => {
+    if (!existingRemarks) {
+      await fetchRemarks(listingId);
+    } else {
+      setSelectedRemarks(existingRemarks);
+    }
     setRemarksModalVisible(true);
   };
 
   const closeRemarksModal = () => {
     setRemarksModalVisible(false);
+    setSelectedRemarks(null);
+  };
+
+  const fetchRemarks = async (listingId) => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SEARCH_API_URL}/listing/${listingId}`);
+      const data = await response.json();
+
+      setSelectedRemarks(data.remarks || 'Remarks not available');
+    } catch (error) {
+      console.error('Error fetching remarks:', error);
+      setSelectedRemarks('Remarks not available');
+    }
   };
 
   // const handleClickOutside = (event) => {
@@ -80,14 +103,15 @@ export default function ImageSearchResults({ searchResults }) {
                 <div>Price: ${Number(listing.price).toLocaleString()}</div>
               </div>
             </div>
-            {listing.remarks ? (
-              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.remarks)}>
+            {listing.remarks ? (            
+              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.listingId, listing.remarks)}>
                 {listing.remarks.length > 100 ? listing.remarks.substring(0, 100) + '...' : listing.remarks}
               </div>
             ) : (
-              <div className={imageSearchstyles['listing-remarks']}>
-                Remarks not available
+              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.listingId, listing.remarks)}>
+                See remarks
               </div>
+
             )}
           </div>
         );

@@ -20,14 +20,16 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
   useEffect(() => {
     // Ensure this code runs only in the client-side environment
     const savedFormData = JSON.parse(localStorage.getItem('criteriaSearchFormData') || '{}');
-
+    const savedShowMoreOptions = JSON.parse(localStorage.getItem('showMoreOptions') || 'false');
+    console.log('savedShowMoreOptions:', savedShowMoreOptions);
+ 
     setProvince(savedFormData.provState || null);
     setCity(savedFormData.city || '');
     setBedsInt(savedFormData.bedsInt || null);
     setBathsInt(savedFormData.bathsInt || null);
     setMinPrice(savedFormData.price ? savedFormData.price[0] : null);
     setMaxPrice(savedFormData.price ? savedFormData.price[1] : null);
-    setShowMoreOptions(savedFormData.showMoreOptions || false);
+    setShowMoreOptions(savedShowMoreOptions);
   }, []);
 
   // Update the searchCriteria in the parent component whenever the form fields change
@@ -39,13 +41,12 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
       bedsInt: bedsInt,
       bathsInt: bathsInt,
       price: [minPrice, maxPrice],
-      showMoreOptions: showMoreOptions
+      showMoreOptions: showMoreOptions  
     };
     // Check that not all fields are empty
     const isPayloadNotEmpty = payload.provState || payload.city || payload.bedsInt !== null || payload.bathsInt !== null || payload.price.some(price => price !== null);
 
     if (isPayloadNotEmpty) {
-      // Save to localStorage
       localStorage.setItem('criteriaSearchFormData', JSON.stringify(payload));
     } else {
       console.log('Empty payload not saved.');
@@ -55,6 +56,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
     onFormChange(payload);    // Notify the parent component about the change
   }, [province, city, bedsInt, bathsInt, minPrice, maxPrice, showMoreOptions]);
   
+
   // Update state only if value is a non-negative integer
   const handleIntChange = (value, setter) => {
   

@@ -1,5 +1,5 @@
 from typing import Any, Tuple, List, Dict, Optional, Union
-import redis, os, arrow, re
+import redis, os, arrow, re, copy
 import json, pytz, math
 from enum import Enum, auto
 import pandas as pd
@@ -86,8 +86,11 @@ class RedisDataStore:
     self.text_embedder = text_embedder
     self.score_aggregation_method = score_aggregation_method
 
+    self.listing_prefix = f"{DOC_PREFIX}:L"
     self.image_prefix = f"{DOC_PREFIX}:I"
     self.text_prefix = f"{DOC_PREFIX}:T"
+
+    self.listing_index_name = INDEX_NAME
     self.image_index_name = f"{INDEX_NAME}_I"
     self.text_index_name = f"{INDEX_NAME}_T"
     
@@ -102,20 +105,33 @@ class RedisDataStore:
     embedding_type: 'I' for image, 'T' for text.
     """
     doc_prefix = self.image_prefix if embedding_type == 'I' else self.text_prefix
+    if embedding_type == 'I':
+      doc_prefix = self.image_prefix
+    elif embedding_type == 'T':
+      doc_prefix = self.text_prefix
+    elif embedding_type is None:
+      doc_prefix = self.listing_prefix
+
     try:
       if listing_id is None and obj_id is None:   # get all 
         redis_keys = self.client.keys(f"{doc_prefix}:*")
         listings_data = [self._postprocess_listing_json(self.client.json().get(redis_key)) for redis_key in redis_keys]
         return listings_data
 
-      if obj_id is not None:
-        redis_key = f"{doc_prefix}:{listing_id}:{obj_id}"
-        listing_data = self.client.json().get(redis_key)
-        if not listing_data: return None
-        listing_data = self._postprocess_listing_json(listing_data)
-        return listing_data
+      if embedding_type is not None:
+        if obj_id is not None:
+          redis_key = f"{doc_prefix}:{listing_id}:{obj_id}"
+          listing_data = self.client.json().get(redis_key)
+          if not listing_data: return None
+          listing_data = self._postprocess_listing_json(listing_data)
+          return listing_data
+        else:
+          redis_key_pattern = f"{doc_prefix}:{listing_id}:*"
+          redis_keys = self.client.keys(redis_key_pattern)
+          listings_data = [self._postprocess_listing_json(self.client.json().get(redis_key)) for redis_key in redis_keys]
+          return listings_data
       else:
-        redis_key_pattern = f"{doc_prefix}:{listing_id}:*"
+        redis_key_pattern = f"{self.listing_prefix}:{listing_id}"
         redis_keys = self.client.keys(redis_key_pattern)
         listings_data = [self._postprocess_listing_json(self.client.json().get(redis_key)) for redis_key in redis_keys]
         return listings_data
@@ -149,8 +165,7 @@ class RedisDataStore:
     elif embedding_type == 'T' and 'remark_chunk_id' in listing_json.keys() and listing_json['remark_chunk_id'] is not None:
       redis_key = f"{self.text_prefix}:{listing_json['listing_id']}:{listing_json['remark_chunk_id']}"
     else:
-      # Fallback Redis key if neither is provided
-      redis_key = f"{DOC_PREFIX}:{listing_json['listing_id']}"
+      redis_key = f"{self.listing_prefix}:{listing_json['listing_id']}"
 
     return redis_key
 
@@ -182,6 +197,11 @@ class RedisDataStore:
         for listing_json in listings[i:i+batch_size]:
           redis_key = self._create_key(listing_json, embedding_type=embedding_type)
 
+          if embedding_type == 'I' or embedding_type == 'T':
+            # remove remarks
+            if 'remarks' in listing_json:
+              del listing_json['remarks']
+
           listing_json = self._preprocess_listing_json(listing_json)
 
           pipe.json().set(redis_key, Path.root_path(), listing_json)
@@ -210,23 +230,24 @@ class RedisDataStore:
     )
 
     top_scores, top_image_names = [], []
-    # listing_remarks = {}
     all_json_fields = {}
     for doc in query_response.docs:
       doc_json = json.loads(doc.json)
+      listing_id = doc_json['listing_id']
       score = 1.-float(doc.score)    # such that higher score is better match
       top_scores.append(score)
       top_image_names.append(doc_json['image_name'])
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
-      remarks = doc_json['remarks']
-      # listing_remarks[doc_json['listing_id']] = remarks
-
+      # remarks = doc_json['remarks']
+      # remarks = self.get(listing_id=listing_id, embedding_type=None)[0]['remarks']
       if include_all_fields:
-        all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
-      else:
+        all_json_fields[listing_id] = {k: v for k, v in doc_json.items() if k != 'embedding'}
+        # all_json_fields[listing_id]['remarks'] = remarks
+      # else:
         # only store remarks
-        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
+        # all_json_fields[listing_id] = {'remarks': remarks}
+
 
     if group_by_listingId:
       return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
@@ -258,13 +279,13 @@ class RedisDataStore:
       top_remark_chunk_ids.append(doc_json['remark_chunk_id'])
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
-      remarks = doc_json['remarks']
-      # listing_remarks[doc_json['listing_id']] = remarks
+      # remarks = doc_json['remarks']
+
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
-      else:
-        # only store remarks
-        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
+      # else:
+      #   # only store remarks
+      #   all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
@@ -296,14 +317,13 @@ class RedisDataStore:
       top_image_names.append(doc_json['image_name'])
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
-      remarks = doc_json['remarks']
-      # listing_remarks[doc_json['listing_id']] = remarks
+      # remarks = doc_json['remarks']
 
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
-      else:
-        # only store remark
-        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
+      # else:
+      #   # only store remark
+      #   all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
@@ -335,13 +355,13 @@ class RedisDataStore:
       top_remark_chunk_ids.append(doc_json['remark_chunk_id'])
 
       # add remarks (for dev, and demo, not needed for production, so remove later)
-      remarks = doc_json['remarks']
-      # listing_remarks[doc_json['listing_id']] = remarks
+      # remarks = doc_json['remarks']
+
       if include_all_fields:
         all_json_fields[doc_json['listing_id']] = {k: v for k, v in doc_json.items() if k != 'embedding'}
-      else:
-        # only store remark
-        all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
+      # else:
+      #   # only store remark
+      #   all_json_fields[doc_json['listing_id']] = {'remarks': remarks}
 
     if group_by_listingId:
       return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
@@ -363,6 +383,7 @@ class RedisDataStore:
       if group_by_listingId: return []
       else: return [], []
 
+    listing_info = {}
     combined_results = []
     if image or image_embedding:
       if image_embedding is None:
@@ -379,8 +400,7 @@ class RedisDataStore:
                                                       **filters)
 
       if include_all_fields:
-        # strip out fields and store it separately in listing_info
-        listing_info = {}
+        # strip out fields and store it separately in listing_info        
         for listing in listings_image_image + listings_image_text:
           listing_info[listing['listingId']] = {k: v for k, v in listing.items() if k not in ['listingId', 'agg_score', 'remarks', 'image_names', 'image_name', 'embeddingType']}
           for key in list(listing.keys()):
@@ -456,7 +476,7 @@ class RedisDataStore:
       top_item_names, top_scores = zip(*sorted(zip(top_item_names, top_scores), key=lambda x: x[1], reverse=True))
       return top_item_names, top_scores
 
-  def multi_image_search(self, images: List[Image.Image], phrase: str = None, topk=5, group_by_listingId=False, **filters):
+  def multi_image_search(self, images: List[Image.Image], phrase: str = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     # use mean(image embeddings) for now.
     all_image_features = []
     # print(f'# of images: {len(images)}')
@@ -475,8 +495,12 @@ class RedisDataStore:
       text_features = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
       text_embedding = np.array(text_features, dtype=np.float64).tobytes()
 
-    return self.search(image_embedding=image_embedding, text_embedding=text_embedding, topk=topk, group_by_listingId=group_by_listingId, **filters)
-
+    return self.search(image_embedding=image_embedding, 
+                       text_embedding=text_embedding, 
+                       topk=topk, 
+                       group_by_listingId=group_by_listingId, 
+                       include_all_fields=include_all_fields,
+                       **filters)
 
 
 
@@ -519,8 +543,10 @@ class RedisDataStore:
     # Check if the embedding is an image embedding, all else is 0 for now (i.e. text embedding)
     if 'image_name' in listing_json and listing_json['image_name'] is not None:
       listing_json['embeddingType'] = 'I'
-    else:
+    elif 'remark_chunk_id' in listing_json and listing_json['remark_chunk_id'] is not None:
       listing_json['embeddingType'] = 'T'
+    else:
+      pass
 
     # photos is not needed and its quite long, not needed. its also np ndarray
     if 'photos' in listing_json:
@@ -580,22 +606,30 @@ class RedisDataStore:
 
     return redis_query
     
-  def import_from_faiss_index(self, faiss_index: FaissIndex, listing_df: pd.DataFrame, embedding_type: str = 'I', sample_size: int = None):
+  def import_from_faiss_index(self, 
+                              faiss_index: FaissIndex, 
+                              listing_df: pd.DataFrame, 
+                              embedding_type: str = 'I', 
+                              offset: int = None,
+                              length: int = None):
     """
     Import data from a FaissIndex object into Redisearch. The listing_df must be 
     there to provide the necessary metadata for each listing.
     """
-    _embeddings = faiss_index.index.reconstruct_n(0, faiss_index.index.ntotal)
+    if embedding_type == 'I' or embedding_type == 'T':    
+      if offset is None and length is None:
+        _embeddings = faiss_index.index.reconstruct_n(0, faiss_index.index.ntotal)
+        _df = join_df(faiss_index.aux_info, listing_df, left_on='listing_id', right_on='jumpId', how='left')
+      else:
+        _embeddings = faiss_index.index.reconstruct_n(offset, length)
+        _df = join_df(faiss_index.aux_info.iloc[offset:offset+length], listing_df, left_on='listing_id', right_on='jumpId', how='left')
+      
+      _df.drop(columns=['jumpId'], inplace=True)
+      _df['embedding'] = [_embeddings[i] for i in range(_embeddings.shape[0])]
 
-    _df = join_df(faiss_index.aux_info, listing_df, left_on='listing_id', right_on='jumpId', how='left')
-    _df.drop(columns=['jumpId'], inplace=True)
-    _df['embedding'] = [_embeddings[i] for i in range(_embeddings.shape[0])]
-
-    if sample_size is not None:
-      _df = _df.sample(sample_size)
-      _df.defrag_index(inplace=True)
-
-    listing_jsons = _df.to_dict(orient='records')
+      listing_jsons = _df.to_dict(orient='records')
+    elif embedding_type is None:
+      listing_jsons = listing_df.rename(columns={'jumpId': 'listing_id'}).to_dict(orient='records')
 
     self.batch_insert(listing_jsons, embedding_type=embedding_type)
 
@@ -604,26 +638,44 @@ class RedisDataStore:
     try:
       self.client.ft(self.image_index_name).dropindex()
       self.client.ft(self.text_index_name).dropindex()
+      self.client.ft(self.listing_index_name).dropindex()
     except Exception as e:
       print(f"Error deleting index: {e}")
 
-  def delete_all_listings(self):
+
+  def delete_all_listings(self, batch_size=100000):
+    cursor = '0'
+    total_deleted = 0
+
     try:
-      keys = self.client.keys(f"{DOC_PREFIX}:*")
-      if keys:
-        self.client.delete(*keys)
-        print(f"All documents with prefix {DOC_PREFIX} deleted successfully.")
+      while cursor != 0:
+        cursor, keys = self.client.scan(cursor=cursor, match=f"{DOC_PREFIX}:*", count=batch_size)
+        if keys:
+          self.client.delete(*keys)
+          total_deleted += len(keys)
+          # print(f"Deleted batch of {len(keys)} documents with prefix {DOC_PREFIX}.")
+    
+      if total_deleted > 0:
+        print(f"All documents with prefix {DOC_PREFIX} deleted successfully. Total deleted: {total_deleted}.")
       else:
         print(f"No documents found with prefix {DOC_PREFIX}.")
     except Exception as e:
       print(f"Error deleting documents: {e}")
 
+
   def delete_listing(self, listing_id: str):
     try:
-      keys = self.client.keys(f"{DOC_PREFIX}:{listing_id}:*")
+      keys = self.client.keys(f"{DOC_PREFIX}:I:{listing_id}:*")
       if keys:
         self.client.delete(*keys)
-        print(f"All documents with prefix {DOC_PREFIX}:{listing_id} deleted successfully.")
+        print(f"All documents with prefix {DOC_PREFIX}:I:{listing_id} deleted successfully.")
+      else:
+        print(f"No documents found with prefix {DOC_PREFIX}:{listing_id}.")
+      
+      keys = self.client.keys(f"{DOC_PREFIX}:T:{listing_id}:*")
+      if keys:
+        self.client.delete(*keys)
+        print(f"All documents with prefix {DOC_PREFIX}:T:{listing_id} deleted successfully.")
       else:
         print(f"No documents found with prefix {DOC_PREFIX}:{listing_id}.")
     except Exception as e:
@@ -635,7 +687,8 @@ class RedisDataStore:
     try:
       keys = []
       for listing_id in listing_ids:
-        keys.extend(self.client.keys(f"{DOC_PREFIX}:{listing_id}:*"))
+        keys.extend(self.client.keys(f"{DOC_PREFIX}:I:{listing_id}:*"))
+        keys.extend(self.client.keys(f"{DOC_PREFIX}:T:{listing_id}:*"))
       if keys:
         self.client.delete(*keys)
         print(f"All {keys} documents deleted successfully.")
@@ -698,28 +751,39 @@ class RedisDataStore:
     }
   
   def create_index(self):
-    # we create 2 kind of indexes, one for listing with image embedding and another for text embedding
-    # for image, we will adapt DOC_PREFIX:I:{listing_id}:{image_name}
-    # for text, we will adapt DOC_PREFIX:T:{listing_id}:{remark_chunk_id}
+    # we create 3 kind of indexes
+    # for just listing, we will adapt DOC_PREFIX::{listing_id}
+    # for image embedding, we will adapt DOC_PREFIX:I:{listing_id}:{image_name}
+    # for text embedding, we will adapt DOC_PREFIX:T:{listing_id}:{remark_chunk_id}
 
-    
+    self.index_definition = IndexDefinition(prefix=[self.listing_prefix], index_type=IndexType.JSON)
     self.image_index_definition = IndexDefinition(prefix=[self.image_prefix], index_type=IndexType.JSON)
     self.text_index_definition = IndexDefinition(prefix=[self.text_prefix], index_type=IndexType.JSON)
 
-    # create the index with the defined schema
+    # Create the index with the defined general schema
     try:
-      fields = list(unpack_schema(self.schema))
+      fields = copy.deepcopy(list(unpack_schema(self.schema)))
+      fields = [f for f in fields if f.as_name != 'remarks']  # remove remarks from embedding related.
 
       self.client.ft(self.image_index_name).create_index(fields=fields, definition=self.image_index_definition)
       print(f"Index {self.image_index_name} created successfully")
 
       self.client.ft(self.text_index_name).create_index(fields=fields, definition=self.text_index_definition)
       print(f"Index {self.text_index_name} created successfully")
+
+      fields = copy.deepcopy(list(unpack_schema(self.schema)))
+      fields = [f for f in fields if f.as_name not in ('image_name', 'remark_chunk_id', 'embeddingType', 'embedding')]
+
+      self.client.ft(self.listing_index_name).create_index(fields=fields, definition=self.index_definition)
+      print(f"Index {self.listing_index_name} created successfully")
+
     except Exception as e:
-      print(f"Error creating index {self.image_index_name}, {self.text_index_name}: {e}")
+      print(f"Error creating index {self.image_index_name}, {self.text_index_name}, {self.listing_index_name}: {e}")
 
   def index_info(self):
-    return [self.client.ft(self.image_index_name).info(), self.client.ft(self.text_index_name).info()]
+    return [self.client.ft(self.image_index_name).info(), 
+            self.client.ft(self.text_index_name).info(),
+            self.client.ft(self.listing_index_name).info()]
   
   def bgsave(self):
     self.client.bgsave()
@@ -807,9 +871,15 @@ class RedisDataStore:
     listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
 
     for listing in listings:
-      listing['remarks'] = all_json_fields[listing['listingId']]['remarks']
+      listing_id = listing['listingId']
+      if listing_id in all_json_fields and 'remarks' in all_json_fields[listing_id]:
+        listing['remarks'] = all_json_fields[listing_id]['remarks']
       if include_all_fields:
-        listing.update(all_json_fields[listing['listingId']])
+        listing.update(all_json_fields[listing_id])
+
+    # Post process 
+    for listing in listings:
+      listing = self._postprocess_listing_json(listing)
 
     return listings
 
@@ -856,11 +926,16 @@ class RedisDataStore:
       listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
 
       for listing in listings:
+        listing_id = listing['listingId']
         listing['image_names'] = []    # no image names for text search, but keep response more consistent
-        listing['remarks'] = all_json_fields[listing['listingId']]['remarks']
+        if listing_id in all_json_fields and 'remarks' in all_json_fields[listing_id]:
+          listing['remarks'] = all_json_fields[listing_id]['remarks']
         if include_all_fields:
-          listing.update(all_json_fields[listing['listingId']])
+          listing.update(all_json_fields[listing_id])
 
+      # Post process 
+      for listing in listings:
+        listing = self._postprocess_listing_json(listing)
       return listings
 
   def normalize_scores(self, results: List[Dict], score_key: str) -> List[Dict]:
@@ -890,12 +965,19 @@ class RedisDataStore:
         listings_dict[listingId]['agg_score'] += result['agg_score']
       else:
         # Add new listing to listings_dict
-        listings_dict[listingId] = {
-            'listingId': listingId,
-            'agg_score': result['agg_score'],
-            'remarks': result['remarks'],
-            'image_names': []
-        }
+        if 'remarks' in result:
+          listings_dict[listingId] = {
+              'listingId': listingId,
+              'agg_score': result['agg_score'],
+              'remarks': result['remarks'],
+              'image_names': []
+          }
+        else:
+          listings_dict[listingId] = {
+              'listingId': listingId,
+              'agg_score': result['agg_score'],
+              'image_names': []
+          }
 
     # Convert listings_dict back to a list
     combined_results = list(listings_dict.values())
@@ -905,11 +987,11 @@ class RedisDataStore:
   # these are methods that conform to class ListingSearchEngine interface
   # which is also expected by main.py the fastAPI app
   def get_listing(self, listing_id: str) -> Dict[str, Any]:
-    listing_docs = self.get(listing_id=listing_id)
-    if len(listing_docs) == 0: return {}
+    listing_docs = self.get(listing_id=listing_id, embedding_type=None)
+    if len(listing_docs) == 0: 
+      return {}
 
     listing_doc = listing_docs[0]
-
     # add jumpId
     listing_doc['jumpId'] = listing_doc['listing_id']
 
@@ -932,3 +1014,5 @@ class RedisDataStore:
   
 
       
+  def __del__(self):
+    self.client.close()

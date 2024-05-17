@@ -214,7 +214,9 @@ export default function Home({ bannerHeight}) {
       const apiEndpoint = selectedFiles.length > 1 ? '/multi-image-search' : '/search';
       console.log('apiEndpoint:', apiEndpoint);
 
-      const queryBody = { ...criteriaSearchFormData, phrase: searchTerm };
+      const { showMoreOptions, ...rest } = criteriaSearchFormData;
+      // const queryBody = { ...criteriaSearchFormData, phrase: searchTerm };
+      const queryBody = { ...rest, phrase: searchTerm };
       formData.append('query_body', JSON.stringify(queryBody));
 
       try {
@@ -224,6 +226,7 @@ export default function Home({ bannerHeight}) {
         });
         const data = await response.json();
         data.searchType = 'image'  // no full listing detail
+        console.log('data:', data[0]);
         setSearchResults(data); // Update the state with the search results
       } catch (error) {
         console.error('Error:', error);
@@ -480,12 +483,12 @@ export default function Home({ bannerHeight}) {
                           console.log('Text search mode updated to:', newMode); // Optional: for debugging
                         }}
                 >
-                  <option value="VSS_ONLY">🔍 by Remarks only </option>
+                  {/* <option value="VSS_ONLY">🔍 by Remarks only </option>
                   <option value="SOFT_MATCH_AND_VSS">🔍📃 by Remarks and Criteria</option>
                   <option value="TEXT_TO_IMAGE_VSS">📝 &rarr; 🖼️ Text to Image</option>
                   <option value="TEXT_TO_IMAGE_TEXT_VSS">📝 &rarr; 🖼️+📝 Text to Image&Remarks</option>
                   <option value="IMAGE_TO_TEXT_VSS">🖼️ &rarr; 📝 Image to Remarks</option>
-                  <option value="IMAGE_TO_IMAGE_TEXT_VSS">🖼️ &rarr; 🖼️+📝 Image to Image & Remarks</option>
+                  <option value="IMAGE_TO_IMAGE_TEXT_VSS">🖼️ &rarr; 🖼️+📝 Image to Image & Remarks</option> */}
                   <option value="ALL_TO_ALL">📝 🖼️ &rarr; 🖼️+📝 All modalities</option>
                 </select>
 

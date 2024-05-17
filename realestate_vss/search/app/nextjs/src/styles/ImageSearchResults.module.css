@@ -113,6 +113,7 @@
   font-size: 1.0rem;
   line-height: 1.4;
   color: #333; /* Or any color that suits your design */
+  /* color: #D2232A; */
 
   /* If you want to have a padding around the text */
   padding: 0.5rem;
@@ -124,6 +125,8 @@
   /* border: 1px solid #eaeaea;  */
   /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);  */
   border-bottom: 5px solid #eeeeee;
+
+  cursor: pointer;
 }
 
 /* Remark modal popup */
