@@ -20,8 +20,6 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
   useEffect(() => {
     // Ensure this code runs only in the client-side environment
     const savedFormData = JSON.parse(localStorage.getItem('criteriaSearchFormData') || '{}');
-    const savedShowMoreOptions = JSON.parse(localStorage.getItem('showMoreOptions') || 'false');
-    console.log('savedShowMoreOptions:', savedShowMoreOptions);
  
     setProvince(savedFormData.provState || null);
     setCity(savedFormData.city || '');
@@ -29,7 +27,7 @@ function CriteriaSearchForm({setSearchCriteria, onFormChange, searchMode}) {
     setBathsInt(savedFormData.bathsInt || null);
     setMinPrice(savedFormData.price ? savedFormData.price[0] : null);
     setMaxPrice(savedFormData.price ? savedFormData.price[1] : null);
-    setShowMoreOptions(savedShowMoreOptions);
+    setShowMoreOptions(savedFormData.showMoreOptions || false);
   }, []);
 
   // Update the searchCriteria in the parent component whenever the form fields change

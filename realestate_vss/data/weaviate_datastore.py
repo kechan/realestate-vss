@@ -1289,6 +1289,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
                          **filters
                          ):
     # use mean(embeddings) for now 
+    print(f'Number of images: {len(images)}')
     all_image_embeddings = []
     for image in images:
       image_embedding = self.image_embedder.embed_from_single_image(image)

@@ -457,9 +457,10 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
     print(e)
     raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
 
-def cleanup_query_for_redis(query: str) -> str:
+def cleanup_query(query: str) -> str:
   """
-    Clean up query to conform to valid redis query.
+    Clean up query for redis, weaviate, etc. 
+    Empty value are removed, numeric stuff are expanded as range search, etc.
 
     Parameters:
     query (dict): The query to be cleaned up.
@@ -520,7 +521,7 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
    
     # clean up query to conform to valid redis query
     print(f'before cleanup: {query}')
-    query = cleanup_query_for_redis(query)
+    query = cleanup_query(query)
     print(f'after cleanup: {query}')
 
     results = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
@@ -538,13 +539,10 @@ async def text_to_text_searcH(query: Dict[str, Any]) -> List[ListingSearchResult
 
   if use_faiss:
     listings = search_engine._search_text_2_text(phrase=query['phrase'], topk=50, group_by_listingId=False, include_all_fields=False, **query)
-  elif use_redis:
-    # clean up query to conform to valid redis query
+  elif use_redis or use_weaviate:
     print(f'before cleanup: {query}')
-    query = cleanup_query_for_redis(query)
+    query = cleanup_query(query)
     print(f'after cleanup: {query}')
-    listings = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
-  elif use_weaviate:
     listings = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   
   for listing in listings:
@@ -569,7 +567,7 @@ async def text_to_image_search(query: Dict[str, Any]) -> List[ListingSearchResul
       return f'search engine error: {e}'
   elif use_redis or use_weaviate:    
     print(f'before cleanup: {query}')
-    query = cleanup_query_for_redis(query)
+    query = cleanup_query(query)
     print(f'after cleanup: {query}')
 
     try:
@@ -692,9 +690,9 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     try:
       query = json.loads(query_body)
       print(f'before cleanup: {query}')
-      if use_redis:
-        query = cleanup_query_for_redis(query)
-        print(f'after cleanup: {query}')
+
+      query = cleanup_query(query)
+      print(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}"}
     
@@ -742,8 +740,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
     try:
       query = json.loads(query_body)
       print(f'before cleanup: {query}')
-      # if use_redis:
-      query = cleanup_query_for_redis(query)
+      query = cleanup_query(query)
       print(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}."}
