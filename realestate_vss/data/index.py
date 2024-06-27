@@ -132,13 +132,13 @@ class FaissIndex:
 
 
   @classmethod
-  def from_dataframe(cls, df: pd.DataFrame, aux_key: str, embedding_column: str = 'embedding'):
+  def from_dataframe(cls, df: pd.DataFrame, aux_key: str, display_key:str, embedding_column: str = 'embedding'):
     if embedding_column not in df.columns or aux_key not in df.columns:
       raise ValueError(f'{embedding_column} and {aux_key} must be columns in the dataframe')
     
     embeddings = np.stack(df[embedding_column].values)
     aux_info = df.drop(columns=[embedding_column])  # dont want to store all the embeddings in aux info
-    return cls(embeddings=embeddings, aux_info=aux_info, aux_key=aux_key)
+    return cls(embeddings=embeddings, aux_info=aux_info, aux_key=aux_key, display_key=display_key)
 
 
   def add(self, embeddings: np.array, aux_info: pd.DataFrame):

@@ -676,7 +676,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         else:
           raise e
 
-  def __del__(self):
+  def close(self):
     self.client.close()
 
   def create_collection(self):
@@ -856,6 +856,10 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     for listing in listing_texts:
       self._delete_object_by_uuid(listing['uuid'], 'Listing_Text')
 
+  def delete_listings(self, listing_ids: List[str]):
+    for listing_id in listing_ids:
+      self.delete_listing(listing_id)
+
   def count_all(self) -> int:
     count = 0
     for name, _ in self.client.collections.list_all().items():
@@ -913,6 +917,14 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
     return all_objects
     
+  def get_unique_listing_ids(self) -> List[str]:
+    listing_ids = set()
+    for listing in self.get_all(embedding_type='I'):
+      listing_ids.add(listing['listing_id'])
+    for listing in self.get_all(embedding_type='T'):
+      listing_ids.add(listing['listing_id'])
+
+    return list(listing_ids)
 
   def insert(self, listing_json: Dict, embedding_type: str = 'I'):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"

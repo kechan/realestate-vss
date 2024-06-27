@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 import tensorflow as tf
 from PIL import Image
+import pillow_heif
+pillow_heif.register_heif_opener()   
 
 from realestate_core.common.utils import load_from_pickle
 from realestate_vision.common.utils import get_listingId_from_image_name
@@ -127,3 +129,14 @@ def read_and_preprocess_image(image_path, preprocess):
   img = preprocess(img)
   
   return img
+
+def read_and_process_image(image_path: Path, processor):
+  """
+  similar to read_and_preprocess_image but for HuggingFace CLIPModel
+  """
+  img = Image.open(image_path).convert("RGB")
+
+  # TODO: try to see if doing this in batch of images is faster
+  img = processor(images=[img], return_tensors="pt")
+  
+  return img['pixel_values'][0]

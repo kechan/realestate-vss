@@ -1014,5 +1014,5 @@ class RedisDataStore:
   
 
       
-  def __del__(self):
+  def close(self):
     self.client.close()

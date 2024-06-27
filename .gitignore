@@ -169,4 +169,7 @@ search/app/nextjs
 
 upload_tunnelling_host.zsh
 docker-compose.yml
+docker-compose.yml.dev
 test-docker-compose.yml
+quantized_hfclip.pth
+quantized_open_clip.pth

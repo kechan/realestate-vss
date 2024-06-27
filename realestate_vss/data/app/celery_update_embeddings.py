@@ -1,4 +1,4 @@
-from typing import Optional, List, Any
+from typing import Optional, List, Union, Any
 
 import shutil, os, re
 from pathlib import Path
@@ -14,6 +14,9 @@ from realestate_core.common.utils import join_df
 from realestate_vss.data.index import FaissIndex
 from realestate_vss.data.es_client import ESClient
 from realestate_vss.data.redis_datastore import RedisDataStore
+
+import weaviate
+from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -62,9 +65,9 @@ def upsert_embeddings_to_faiss(embeddings_df: pd.DataFrame,
   else:
     raise ValueError('operation must be either add or update')
 
-def process_redis_docs(embeddings_df: pd.DataFrame, 
+def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame, 
                        listingIds: List[str], 
-                       datastore: RedisDataStore, 
+                       datastore: Union[RedisDataStore, WeaviateDataStore],
                        aux_key: str,
                        listing_df: pd.DataFrame,
                        embedding_type: str = 'I') -> None:
@@ -74,7 +77,7 @@ def process_redis_docs(embeddings_df: pd.DataFrame,
   Parameters:
   embeddings_df (pd.DataFrame): DataFrame containing the embeddings.
   listingIds (List[Any]): List of listing IDs to be processed.
-  datastore (Any): The Redis datastore object where docs are to be added/deleted.
+  datastore (Any): The Redis/Weaviate datastore object where docs are to be added/deleted.
   aux_key (str): The column name in the DataFrame that corresponds to the auxiliary key (image name or remark chunk ID).
                  This can also be thought of as the primary key to auxilliary information.  
   listing_df (pd.DataFrame): DataFrame containing the detail listing data.                 
@@ -89,18 +92,28 @@ def process_redis_docs(embeddings_df: pd.DataFrame,
 @celery.task
 def update_embeddings(img_cache_folder: str):
   _ = load_dotenv(find_dotenv())
-  use_redis = False
-  if "REDIS_HOST" in os.environ and "REDIS_PORT" in os.environ:
-    redis_host = os.environ["REDIS_HOST"]
-    redis_port = int(os.environ["REDIS_PORT"])
-    use_redis = True
-    celery_logger.info(f'redis_host: {redis_host}, redis_port: {redis_port}')
-  else:
-    celery_logger.info('REDIS_HOST and REDIS_PORT not found in .env, not using Redis')
-  
+  use_redis = (os.getenv("USE_REDIS").lower() == 'true')
   if use_redis:
-    redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
-    datastore = RedisDataStore(client=redis_client, image_embedder=None, text_embedder=None)   # no query for update
+    if "REDIS_HOST" in os.environ and "REDIS_PORT" in os.environ:
+      redis_host = os.environ["REDIS_HOST"]
+      redis_port = int(os.environ["REDIS_PORT"])
+      celery_logger.info(f'redis_host: {redis_host}, redis_port: {redis_port}')
+      redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
+      datastore = RedisDataStore(client=redis_client, image_embedder=None, text_embedder=None)   # no query for update
+    else:
+      celery_logger.info('REDIS_HOST and REDIS_PORT not found in .env, not using Redis')
+      use_redis = False
+    
+  use_weaviate = (os.getenv("USE_WEAVIATE").lower() == 'true')
+  if use_weaviate:
+    WEAVIATE_HOST = os.getenv("WEAVIATE_HOST")
+    WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT"))
+    celery_logger.info(f'weaviate_host: {WEAVIATE_HOST}, weaviate_port: {WEAVIATE_PORT}')
+    client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
+    datastore = WeaviateDataStore(client=client, image_embedder=None, text_embedder=None)
+  else:
+    celery_logger.info('WEAVIATE_HOST and WEAVIATE_PORT not found in .env, not using Weaviate')
+    use_weaviate = False
 
   img_cache_folder = Path(img_cache_folder)
   working_folder = img_cache_folder/f'{model_name}_{pretrained}'
@@ -113,6 +126,10 @@ def update_embeddings(img_cache_folder: str):
           job_id = match.group(1)
           job_ids.append((os.path.getctime(f), job_id))
 
+  if len(job_ids) == 0:
+    celery_logger.info('No job_ids found from *image_embeddings_df. Exiting...')
+    return
+  
   # Sort the list of tuples
   job_ids.sort()
 
@@ -271,27 +288,27 @@ def update_embeddings(img_cache_folder: str):
 
   listing_df.to_feather(working_folder/'listing_df')
 
-  # REDIS stuff
-  if use_redis:
+  # REDIS/Weaviate stuff
+  if use_redis or use_weaviate:
     existing_listingIds = set(datastore.get_unique_listing_ids())
 
     # New listings
     new_listingIds = incoming_listingIds - existing_listingIds
 
-    celery_logger.info(f'Adding image embedding for {len(new_listingIds)} new listings to Redis')
-    process_redis_docs(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
-    celery_logger.info(f'Adding text embedding for {len(new_listingIds)} new listings to Redis')
-    process_redis_docs(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
+    celery_logger.info(f'Adding image embedding for {len(new_listingIds)} new listings to datastore')
+    process_and_batch_insert_to_datastore(image_embeddings_df, new_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
+    celery_logger.info(f'Adding text embedding for {len(new_listingIds)} new listings to datastore')
+    process_and_batch_insert_to_datastore(text_embeddings_df, new_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
     # Updated listings
     updated_listingIds = incoming_listingIds.intersection(existing_listingIds)
     datastore.delete_listings(listing_ids=updated_listingIds)  # delete and reinsert
 
-    celery_logger.info(f'Updating image embeddings for {len(updated_listingIds)} listings in Redis')
-    process_redis_docs(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
+    celery_logger.info(f'Updating image embeddings for {len(updated_listingIds)} listings in datastore')
+    process_and_batch_insert_to_datastore(image_embeddings_df, updated_listingIds, datastore, 'image_name', listing_df, embedding_type='I')
 
-    celery_logger.info(f'Updating text embeddings for {len(updated_listingIds)} listings in Redis')
-    process_redis_docs(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
+    celery_logger.info(f'Updating text embeddings for {len(updated_listingIds)} listings in datastore')
+    process_and_batch_insert_to_datastore(text_embeddings_df, updated_listingIds, datastore, 'remark_chunk_id', listing_df, embedding_type='T')
 
   # Clean up current job id specific files
   for job_id in job_ids:
