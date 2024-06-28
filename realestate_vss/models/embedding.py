@@ -28,6 +28,12 @@ class OpenClipEmbeddingModel:
                state_dict_path: Optional[Path]=None,
                weight_quant_type = qint8,
                activation_quant_type = None):
+    def build_attention_mask(num_pos):
+      mask = torch.empty(num_pos, num_pos)
+      mask.fill_(float("-inf"))
+      mask.triu_(1)  # zero out the lower diagonal
+      return mask
+    
     if embedding_model is None:
       self.device = device      
       self.model_name = model_name
@@ -40,6 +46,9 @@ class OpenClipEmbeddingModel:
         model.to_empty(device=torch.device("cpu"))
         state_dict = torch.load(state_dict_path, map_location='cpu')
         model.load_state_dict(state_dict, strict=True, assign=True)
+
+        # attn_mask are not recovered from load_state_dict, hack it here
+        model.register_buffer('attn_mask', build_attention_mask(model.context_length), persistent=False)
         freeze(model)
       else:
         model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
@@ -230,9 +239,13 @@ class HFCLIPModel:
         state_dict = torch.load(state_dict_path, map_location='cpu')
         model.load_state_dict(state_dict, strict=True, assign=True)
 
+        # positions_ids are not recovered from load_state_dict
         # extra hack to make it work
         num_positions = model.vision_model.embeddings.num_positions
         model.vision_model.embeddings.register_buffer('position_ids', torch.arange(num_positions).expand((1, -1)), persistent=False)
+
+        max_position_embeddings = model.text_model.config.max_position_embeddings
+        model.text_model.embeddings.register_buffer('position_ids', torch.arange(max_position_embeddings).expand((1, -1)), persistent=False)
 
         freeze(model)
       else:
