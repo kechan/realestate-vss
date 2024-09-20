@@ -143,6 +143,7 @@ class ListingSearchEngine:
       return self.image_embeddings_df.q("listing_id == @listingId").image_name.values.tolist()
 
 # ---------------------------------------------------------
+# Stuff below this line could be old, consider removing
 
   def text_search(self, mode: SearchMode, topk=50, return_df=True, lambda_val=None, alpha_val=None, **query) -> Union[pd.DataFrame, List[Dict]]:    
     '''
@@ -515,6 +516,7 @@ class ListingSearchEngine:
         sorted_image_names = sorted(max_scores, key=max_scores.get, reverse=True)
         return sorted_image_names, [max_scores[name] for name in sorted_image_names]
 
+  # Stuff above this line could be old, consider removing
   # ---------------------------------------------------------
   # These _search_* methods should be common interface with RedisDataStore
   

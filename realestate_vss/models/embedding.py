@@ -336,7 +336,7 @@ class HFCLIPImageEmbeddingModel(HFCLIPModel):
     else:
       return np.array(embeddings)
     
-class HFCliptTextEmbeddingModel(HFCLIPModel):
+class HFClipTextEmbeddingModel(HFCLIPModel):
   # def __init__(self, model_id: str = None, 
   #              embedding_model: Optional['HFCLIPModel']=None,
   #              device=torch.device('cpu')):
