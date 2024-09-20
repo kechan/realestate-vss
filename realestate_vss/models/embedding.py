@@ -74,15 +74,42 @@ class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     
-  def embed(self, image_paths: List[Path], return_df=True) -> pd.DataFrame:
+  def embed(self, image_paths: List[Path], return_df=True, use_process_pool=False) -> pd.DataFrame:
     batch_size = 64
 
     image_names, embeddings = [], []
 
-    with ProcessPoolExecutor(max_workers=12) as executor:
+    if use_process_pool:
+      with ProcessPoolExecutor(max_workers=12) as executor:
+        for i in tqdm(range(0, len(image_paths), batch_size), desc='Processing images'):
+          batch_paths = image_paths[i: i + batch_size]
+          batch_images = list(executor.map(read_and_preprocess_image, batch_paths, [self.preprocess]*len(batch_paths)))
+
+          # Stack images into a single tensor
+          batch_tensor = torch.stack(batch_images, dim=0).to(self.device)
+
+          with torch.no_grad():
+            image_features = self.model.encode_image(batch_tensor, normalize=True).cpu().numpy()
+
+          image_names.extend([p.name for p in batch_paths])
+          embeddings.extend(list(image_features))
+    else:
       for i in tqdm(range(0, len(image_paths), batch_size), desc='Processing images'):
         batch_paths = image_paths[i: i + batch_size]
-        batch_images = list(executor.map(read_and_preprocess_image, batch_paths, [self.preprocess]*len(batch_paths)))
+        
+        # Process images in batches
+        batch_images = []
+        for path in batch_paths:
+          try:
+            img = Image.open(path).convert('RGB')
+            img_tensor = self.preprocess(img)
+            batch_images.append(img_tensor)
+          except Exception as e:
+            print(f"Error processing image {path}: {e}")
+            continue
+
+        if not batch_images:
+          continue
 
         # Stack images into a single tensor
         batch_tensor = torch.stack(batch_images, dim=0).to(self.device)
@@ -275,7 +302,6 @@ class HFCLIPImageEmbeddingModel(HFCLIPModel):
 
   def embed(self, image_paths: List[Path], return_df=True) -> pd.DataFrame:
     batch_size = 64
-
     image_names, embeddings = [], []
 
     # with ProcessPoolExecutor(max_workers=12) as executor:
