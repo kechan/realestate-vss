@@ -21,8 +21,9 @@ try:
   from weaviate.classes.query import MetadataQuery, Filter
   from weaviate.exceptions import UnexpectedStatusCodeError
 except ImportError:
-  print("with weaviate-client v3")
+  raise NotImplementedError("This class is only compatible with weaviate-client v4")
 
+import logging
 
 class WeaviateDataStore:
   def __init__(self,
@@ -30,6 +31,8 @@ class WeaviateDataStore:
                text_embedder,
                score_aggregation_method = 'max'
                ):
+    self.logger = logging.getLogger(self.__class__.__name__)
+
     self.image_embedder = image_embedder
     self.text_embedder = text_embedder
     self.score_aggregation_method = score_aggregation_method
@@ -57,12 +60,15 @@ class WeaviateDataStore:
       Create a key for a listing document based on the listing_json.
       """
       if 'image_name' in listing_json.keys() and 'remark_chunk_id' in listing_json.keys():
+        self.logger.error("Both 'image_name' and 'remark_chunk_id' are present in the listing_json. This is not expected.")
         raise ValueError("Both 'image_name' and 'remark_chunk_id' should not be present at the same time since the vector is either an image embedding or text embedding.")
       
       if embedding_type == 'I' and 'image_name' not in listing_json.keys():
+        self.logger.error("The 'image_name' field is required for image embeddings.")
         raise ValueError("The 'image_name' field is required for image embeddings.")
       
       if embedding_type == 'T' and 'remark_chunk_id' not in listing_json.keys():
+        self.logger.error("The 'remark_chunk_id' field is required for text embeddings.")
         raise ValueError("The 'remark_chunk_id' field is required for text embeddings.")
 
       if embedding_type == 'I' and 'image_name' in listing_json.keys() and listing_json['image_name'] is not None:
@@ -92,7 +98,7 @@ class WeaviateDataStore:
       try:
         return datetime.strptime(date_str, '%y-%m-%d:%H:%M:%S').strftime('%Y-%m-%dT%H:%M:%SZ')
       except ValueError as e:
-        print(f"Error parsing date: {e}")
+        self.logger.error(f"Error parsing date: {e}")
         return None
 
   def _preprocess_listing_json(self, listing_json: Dict, embedding_type: str = 'I') -> Dict:
@@ -327,7 +333,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         self.create_collection()
       except weaviate.exceptions.UnexpectedStatusCodeException as e:
         if e.status_code == 422:
-          print('Schema already exists')
+          self.logger.info('Schema already exists')
         else:
           raise e
 
@@ -498,22 +504,28 @@ class WeaviateDataStore_v4(WeaviateDataStore):
        # Delete each collection, which also removes all its data objects
       self.client.collections.delete(name)
 
-  def delete_listing(self, listing_id: str):
+  def delete_listing(self, listing_id: str, embedding_type: str = None):
     """
-    Delete all objects related to a listing_id.
+    Delete all objects related to a listing_id and embedding_type
+    if embedding_type is None, delete all objects related to the listing_id
     """
-    listing_images = self.get(listing_id, embedding_type='I')  # image embeddings
-    listing_texts = self.get(listing_id, embedding_type='T')   # text embeddings
+    if embedding_type == 'I' or embedding_type is None:
+      listing_images = self.get(listing_id, embedding_type='I')  # image embeddings
+      for doc in listing_images:
+        self._delete_object_by_uuid(doc['uuid'], 'Listing_Image')      
 
-    for listing in listing_images:
-      self._delete_object_by_uuid(listing['uuid'], 'Listing_Image')
+    if embedding_type == 'T' or embedding_type is None:
+      listing_texts = self.get(listing_id, embedding_type='T')  # text embeddings
+      for doc in listing_texts:
+        self._delete_object_by_uuid(doc['uuid'], 'Listing_Text')
 
-    for listing in listing_texts:
-      self._delete_object_by_uuid(listing['uuid'], 'Listing_Text')
-
-  def delete_listings(self, listing_ids: List[str]):
+  def delete_listings(self, listing_ids: List[str], embedding_type: str = None):
+    """
+    Delete objects related to multiple listing_ids and embedding_type.
+    If embedding_type is None, delete all objects related to the listing_ids.
+    """
     for listing_id in listing_ids:
-      self.delete_listing(listing_id)
+      self.delete_listing(listing_id, embedding_type=embedding_type)
 
   def count_all(self) -> int:
     count = 0
@@ -522,13 +534,13 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
     return count
 
-  def get(self, listing_id: Optional[str] = None, embedding_type: str = 'I'):
+  def get(self, listing_id: Optional[str] = None, embedding_type: str = 'I', include_vector=False):
     """
     Retrieve items from Weaviate related to listing_id and embedding_type.
     If listing_id is None, retrieve all items.
     embedding_type: 'I' for image, 'T' for text.
     """
-    # this should be safe as we don't expect more than 1000 items for a listing_id
+    # this should be safe as we don't expect more than 1000 items for one listing_id
     offset, limit = 0, 1000  
 
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
@@ -543,6 +555,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     # Fetch objects with filters and a limit, if applicable
     response = collection.query.fetch_objects(
       filters=filters,
+      include_vector=include_vector,
       limit=limit  
     )
 
@@ -550,6 +563,9 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     for o in response.objects:    
       listing_json = self._postprocess_listing_json(o.properties)
       listing_json['uuid'] = o.uuid.__str__()
+
+      if include_vector:
+        listing_json['embedding'] = o.vector['default']
 
       results.append(listing_json)
 
@@ -601,7 +617,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       )
       return uuid
     except UnexpectedStatusCodeError as e:
-      print(f"{e.message}")
+      self.logger.info(f"{e.message}")
       return None
 
   def upsert(self, listing_json: Dict, embedding_type: str = 'I'):
@@ -633,7 +649,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       return key
     
     except Exception as e:
-      print(f"Error upserting object: {e}")
+      self.logger.error(f"Error upserting object: {e}")
       return None
 
   def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I'):
@@ -654,7 +670,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
             vector=vector
           )
     except Exception as e:
-      print(f"Error batch inserting objects: {e}")
+      self.logger.error(f"Error batch inserting objects: {e}")
 
 
   def batch_upsert(self, listings: Iterable[Dict], embedding_type: str = 'I'):
@@ -682,7 +698,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
               vector=vector
             )
     except Exception as e:
-      print(f"Error batch upserting objects: {e}")
+      self.logger.error(f"Error batch upserting objects: {e}")
 
   def _search_image_2_image(self, image: Image.Image = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'I'   # targets are images
@@ -956,7 +972,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
                          **filters
                          ):
     # use mean(embeddings) for now 
-    print(f'Number of images: {len(images)}')
+    self.logger.info(f'Number of images: {len(images)}')
     all_image_embeddings = []
     for image in images:
       image_embedding = self.image_embedder.embed_from_single_image(image)
@@ -1007,10 +1023,10 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       # Delete the object based on its UUID and collection name
       collection = self.client.collections.get(collection_name)
       collection.data.delete_by_id(uuid)
-      print(f"Object with UUID {uuid} successfully deleted.")
+      self.logger.info(f"Object with UUID {uuid} successfully deleted.")
 
     except Exception as e:
-      print(f"Error deleting object with UUID {uuid}: {e}")
+      self.logger.error(f"Error deleting object with UUID {uuid}: {e}")
 
 
   def _count_by_collection_name(self, collection_name: str) -> int:
@@ -1020,7 +1036,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       return collection.aggregate.over_all().total_count
 
     except Exception as e:
-      print(f"Error counting objects in collection {collection_name}: {e}")
+      self.logger.error(f"Error counting objects in collection {collection_name}: {e}")
       return None
 
 

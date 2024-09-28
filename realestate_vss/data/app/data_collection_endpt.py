@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, Body
+from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, Body, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
 import shutil, os, gzip, json
@@ -12,6 +12,7 @@ from dotenv import load_dotenv, find_dotenv
 from celery_unstack import unstack
 from celery_embed import embed_listings, embed_listings_from_avm, remove_all_embed_listings_task_ids
 from celery_update_embeddings import update_embeddings, update_inactive_embeddings
+from celery_embed_index import embed_and_index_task
 
 # use this to establish a public endpt for image tagging service pipeline to upload image to
 # ./ngrok http 8000 
@@ -119,6 +120,17 @@ async def update_vec_index():
   update_embeddings.apply_async(args=[str(img_cache_folder)], queue='update_embed_queue')
 
   return JSONResponse(content={"message": "Updating vector index."})
+
+
+@app.get("/embed_and_index")
+async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4)):
+  task = embed_and_index_task.apply_async(args=[str(img_cache_folder), 
+                                                listing_fields, 
+                                                image_batch_size, 
+                                                text_batch_size, 
+                                                num_workers], queue='embed_index_queue')
+  
+  return JSONResponse(content={"message": "Embedding and indexing task started.", "task_id": task.id})
 
 @app.get("/update_inactive_vec_index")
 async def update_inactive_vec_index():

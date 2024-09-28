@@ -72,7 +72,7 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
                        listing_df: pd.DataFrame,
                        embedding_type: str = 'I') -> None:
   """
-  Function to process embeddings and perform operations(add/delete) on Redis.
+  Function to process embeddings and perform operations(add/delete) on Redis or Weaviate datastore.
 
   Parameters:
   embeddings_df (pd.DataFrame): DataFrame containing the embeddings.

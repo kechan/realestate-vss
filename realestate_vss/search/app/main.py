@@ -27,8 +27,37 @@ from dotenv import load_dotenv, find_dotenv
 from google.cloud import storage
 from google.auth.exceptions import DefaultCredentialsError
 
+import logging
+from logging.handlers import RotatingFileHandler
+
+logging.basicConfig(
+  level=logging.INFO,
+  format='%(asctime)s [%(levelname)s] [Logger: %(name)s]: %(message)s',
+  datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+''' Use this for production logging
+log_folder = Path("/path/to/your/log/folder")
+log_filename = log_folder / "main.log"
+logger.setLevel(logging.INFO)
+handler = RotatingFileHandler(
+    filename=str(log_filename),
+    maxBytes=10_000_000,  # 10MB
+    backupCount=5,
+    encoding='utf-8'
+)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+# Optionally, to prevent log messages from being propagated to the root logger
+# (which might have been configured differently elsewhere)
+logger.propagate = False
+'''
+
 # app = FastAPI()
-# uvicorn main:app --reload &  # run this in terminal to start the server
+# uvicorn main:app --port 8002 --reload &  # run this in terminal to start the server
 # uvicorn main:app --host 0.0.0.0 --port 8002 --reload  (demo on GCP)
 
 # Set up CORS middleware configuration
@@ -37,7 +66,6 @@ if "ALLOW_ORIGINS" in os.environ:
   allow_origins = os.environ["ALLOW_ORIGINS"].split(',')
 else:
   raise Exception("ALLOW_ORIGINS environment variable not set in .env file")
-
 
 # Global variable to hold the search engine instance
 search_engine = None
@@ -51,11 +79,11 @@ else:
 
 if "USE_REDIS" in os.environ:
   use_redis = (os.getenv("USE_REDIS").lower() == 'true')
-  print(f'Using Redis: {use_redis}')
+  logger.info(f'Using Redis: {use_redis}')
   if use_redis:
     REDIS_HOST = os.getenv("REDIS_HOST")
     REDIS_PORT = int(os.getenv("REDIS_PORT"))
-    print(f'Using Redis server: {REDIS_HOST}:{REDIS_PORT}')
+    logger.info(f'Using Redis server: {REDIS_HOST}:{REDIS_PORT}')
 else:
   use_redis = False
 
@@ -65,11 +93,21 @@ if use_redis:
 
 if "USE_WEAVIATE" in os.environ:
   use_weaviate = (os.getenv("USE_WEAVIATE").lower() == 'true')
-  print(f'Using Weaviate: {use_weaviate}')
+  logger.info(f'Using Weaviate: {use_weaviate}')
   if use_weaviate:
     WEAVIATE_HOST = os.getenv("WEAVIATE_HOST")
-    WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT"))
-    print(f'Using Weaviate server: {WEAVIATE_HOST}:{WEAVIATE_PORT}')
+    WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT")) if os.getenv("WEAVIATE_PORT") is not None else None
+    if WEAVIATE_HOST is not None and WEAVIATE_PORT is not None:
+      use_local_weaviate = True
+      logger.info(f'Using local Weaviate server: {WEAVIATE_HOST}:{WEAVIATE_PORT}')
+    else:
+      use_local_weaviate = False
+      WCS_URL = os.getenv("WCS_URL")
+      WCS_API_KEY = os.getenv("WCS_API_KEY")
+      if WCS_URL is None or WCS_API_KEY is None:
+        logger.error('WCS_URL and WCS_API_KEY not found in .env')
+        raise Exception("WCS_URL and WCS_API_KEY not found in .env")
+      logger.info('Using Weaviate server on cloud')
 else:
   use_weaviate = False
 
@@ -87,10 +125,10 @@ if "GCS_PROJECT_ID" in os.environ and "GCS_BUCKET_NAME" in os.environ:
     storage_client = storage.Client(project=GCS_PROJECT_ID)
     bucket = storage_client.bucket(GCS_BUCKET_NAME)
   except DefaultCredentialsError as e:
-    print(f'Error connecting to GCS: {e}')
+    logger.error(f'Error connecting to GCS: {e}')
     bucket = None
   except Exception as e:
-    print(f'Error connecting to GCS: {e}')
+    logger.error(f'Error connecting to GCS: {e}')
     bucket = None
 else:
   bucket = None
@@ -99,7 +137,7 @@ else:
 
 if "USE_FAISS" in os.environ:
   use_faiss = (os.getenv("USE_FAISS").lower() == 'true')
-  print(f'Using FAISS: {use_faiss}')
+  logger.info(f'Using FAISS: {use_faiss}')
 else:
   use_faiss = False
 
@@ -108,18 +146,18 @@ if use_faiss:
     faiss_image_index_path = Path(os.getenv("FAISS_IMAGE_INDEX"))
     # if not faiss_index_folder.is_dir():
     #   raise Exception("FAISS_INDEX_FOLDER is not a valid directory")
-    print(f'Using FAISS image index from {faiss_image_index_path}')
+    logger.info(f'Using FAISS image index from {faiss_image_index_path}')
 
     faiss_text_index_path = Path(os.getenv("FAISS_TEXT_INDEX"))
-    print(f'Using FAISS text index from {faiss_text_index_path}')
+    logger.info(f'Using FAISS text index from {faiss_text_index_path}')
   else:
     faiss_image_index_path = None
     faiss_text_index_path = None
-    print('Not using FAISS index')
+    logger.info('Not using FAISS index')
 
   if "LISTING_DF" in os.environ:
     listing_df_path = Path(os.getenv("LISTING_DF"))
-    print(f'Using listing dataframe from {listing_df_path}')
+    logger.info(f'Using listing dataframe from {listing_df_path}')
   else:
     listing_df_path = None
 
@@ -229,7 +267,13 @@ async def startup_event():
     datastore = RedisDataStore(client=redis_client, image_embedder=image_embedder, text_embedder=text_embedder)
 
   elif use_weaviate:
-    client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
+    if use_local_weaviate:
+      client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
+    else:
+      client = weaviate.connect_to_wcs(
+        cluster_url=WCS_URL,
+        auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
+      )
     datastore = WeaviateDataStore(client=client, 
                                   image_embedder=image_embedder, 
                                   text_embedder=text_embedder)
@@ -268,7 +312,7 @@ async def startup_event():
 
 async def shutdown_event():
   if use_weaviate or use_redis:
-    datastore.client.close()
+    datastore.close()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -292,8 +336,8 @@ app.add_middleware(
 
 class ListingData(BaseModel):
   jumpId: Optional[str] = None
-  city: str
-  provState: str
+  city: Optional[str] = None    # TODO: city should not be None, we may refine this later
+  provState: Optional[str] = None   # TODO: provState should not be None, we may refine this later
   postalCode: Optional[str] = None
   lat: Optional[float] = None
   lng: Optional[float] = None
@@ -454,7 +498,7 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
       response.raise_for_status()
       return StreamingResponse(io.BytesIO(response.content), media_type='image/jpeg')
   except Exception as e:
-    print(e)
+    logger.error(e)
     raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
 
 def cleanup_query(query: str) -> str:
@@ -503,7 +547,7 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
 
     provState = query.get('provState', None)
     
-    print(f'query: {query}')
+    logger.info(f'query: {query}')
     if provState is None and (mode == SearchMode.VSS_RERANK_ONLY or mode == SearchMode.SOFT_MATCH_AND_VSS):
       raise HTTPException(status_code=404, detail="provState must be provided")
 
@@ -520,9 +564,9 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
       del query['phrase']   # remove key phrase from query after extracting it
    
     # clean up query to conform to valid redis query
-    print(f'before cleanup: {query}')
+    logger.info(f'before cleanup: {query}')
     query = cleanup_query(query)
-    print(f'after cleanup: {query}')
+    logging.info(f'after cleanup: {query}')
 
     results = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     # add "listing_id" key to each result
@@ -532,7 +576,7 @@ async def search_by_text(query: Dict[str, Union[str, Optional[int], Optional[Lis
   return results
 
 @app.post("/text-to-text-search/")
-async def text_to_text_searcH(query: Dict[str, Any]) -> List[ListingSearchResult]:
+async def text_to_text_search(query: Dict[str, Any]) -> List[ListingSearchResult]:
   phrase = query.get('phrase', None)
   if phrase is not None:
     del query['phrase']   # remove key phrase from query after extracting it
@@ -540,9 +584,9 @@ async def text_to_text_searcH(query: Dict[str, Any]) -> List[ListingSearchResult
   if use_faiss:
     listings = search_engine._search_text_2_text(phrase=query['phrase'], topk=50, group_by_listingId=False, include_all_fields=False, **query)
   elif use_redis or use_weaviate:
-    print(f'before cleanup: {query}')
+    logger.info(f'before cleanup: {query}')
     query = cleanup_query(query)
-    print(f'after cleanup: {query}')
+    logger.info(f'after cleanup: {query}')
     listings = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   
   for listing in listings:
@@ -566,9 +610,9 @@ async def text_to_image_search(query: Dict[str, Any]) -> List[ListingSearchResul
     except Exception as e:
       return f'search engine error: {e}'
   elif use_redis or use_weaviate:    
-    print(f'before cleanup: {query}')
+    logger.info(f'before cleanup: {query}')
     query = cleanup_query(query)
-    print(f'after cleanup: {query}')
+    logger.info(f'after cleanup: {query}')
 
     try:
       listings = datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
@@ -689,15 +733,15 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
   if query_body is not None:
     try:
       query = json.loads(query_body)
-      print(f'before cleanup: {query}')
+      logger.info(f'before cleanup: {query}')
 
       query = cleanup_query(query)
-      print(f'after cleanup: {query}')
+      logger.info(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}"}
     
     phrase = query.get('phrase', None)
-    print(f'phrase: {phrase}')
+    logger.info(f'phrase: {phrase}')
     if phrase is not None:
       del query['phrase']   # remove key phrase from query after extracting it
   else:
@@ -739,14 +783,14 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
   if query_body is not None:
     try:
       query = json.loads(query_body)
-      print(f'before cleanup: {query}')
+      logger.info(f'before cleanup: {query}')
       query = cleanup_query(query)
-      print(f'after cleanup: {query}')
+      logger.info(f'after cleanup: {query}')
     except json.JSONDecodeError:
       return {"error": f"Invalid JSON format in query_body {query_body}."}
     
     phrase = query.get('phrase', None)
-    print(f'phrase: {phrase}')
+    logger.info(f'phrase: {phrase}')
     if phrase is not None:
       del query['phrase']   # remove key phrase from query after extracting it
   else:
@@ -757,6 +801,8 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
     if use_faiss:
       listings = search_engine.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     elif use_redis or use_weaviate:
+      logger.info(f'phrase: {phrase}')
+      logger.info(f'query: {query}')
       listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   except Exception as e:
     return f'Error: {e}'

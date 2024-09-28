@@ -65,7 +65,7 @@ def embed_listings(self, img_cache_folder: str, es_fields: List[str], listing_st
   device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
 
   img_cache_folder = Path(img_cache_folder)
-  listing_folders = img_cache_folder.lfre('^\d+$')
+  listing_folders = img_cache_folder.lfre(r'^\d+$')
   celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
 
   if len(listing_folders) == 0:
