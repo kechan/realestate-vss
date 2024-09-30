@@ -105,6 +105,18 @@ class WeaviateDataStore:
     """
     Perform necessary preprocessing on the listing json before storing it in the Weaviate database
     """
+    def sanitize_listing_json(listing_json):
+      # Replace NaNs or non-scalar NaNs with None
+      sanitized_listing_json = {}
+      for key, value in listing_json.items():
+        if isinstance(value, (list, dict)):  # If the value is a list or dict, keep it as is.
+          sanitized_listing_json[key] = value
+        elif pd.isna(value):  # Replace NaN or NaT with None
+          sanitized_listing_json[key] = None
+        else:
+          sanitized_listing_json[key] = value
+      return sanitized_listing_json
+    
     if embedding_type == 'I':
       wanted_properties = self.common_properties + ['image_name']
     else:
@@ -146,6 +158,9 @@ class WeaviateDataStore:
     # photos is not needed and its quite long, not needed. its also np.ndarray
     if 'photos' in listing_json:
       del listing_json['photos']
+
+    # Replace NaNs with None
+    listing_json = sanitize_listing_json(listing_json)
 
     return listing_json
   
@@ -314,6 +329,9 @@ class WeaviateDataStore:
     combined_results = list(listings_dict.values())
 
     return combined_results
+
+  def ping(self) -> bool:
+    return self.client.is_ready()
 
 
 class WeaviateDataStore_v4(WeaviateDataStore):
@@ -510,14 +528,22 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     if embedding_type is None, delete all objects related to the listing_id
     """
     if embedding_type == 'I' or embedding_type is None:
-      listing_images = self.get(listing_id, embedding_type='I')  # image embeddings
-      for doc in listing_images:
-        self._delete_object_by_uuid(doc['uuid'], 'Listing_Image')      
+      # listing_images = self.get(listing_id, embedding_type='I')  # image embeddings
+      # for doc in listing_images:
+      #   self._delete_object_by_uuid(doc['uuid'], 'Listing_Image')      
+      collection = self.client.collections.get("Listing_Image")
+      collection.data.delete_many(
+        where=Filter.by_property("listing_id").equal(listing_id)
+      )
 
     if embedding_type == 'T' or embedding_type is None:
-      listing_texts = self.get(listing_id, embedding_type='T')  # text embeddings
-      for doc in listing_texts:
-        self._delete_object_by_uuid(doc['uuid'], 'Listing_Text')
+      # listing_texts = self.get(listing_id, embedding_type='T')  # text embeddings
+      # for doc in listing_texts:
+      #   self._delete_object_by_uuid(doc['uuid'], 'Listing_Text')
+      collection = self.client.collections.get("Listing_Text")
+      collection.data.delete_many(
+        where=Filter.by_property("listing_id").equal(listing_id)
+      )
 
   def delete_listings(self, listing_ids: List[str], embedding_type: str = None):
     """
@@ -659,6 +685,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     try:
       with collection.batch.dynamic() as batch:
         for listing_json in tqdm(listings):
+
           listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
           key = self._create_key(listing_json, embedding_type)
 

@@ -14,6 +14,7 @@ from realestate_vss.models.embedding import OpenClipImageEmbeddingModel, OpenCli
 from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
 
 from realestate_vss.data.es_client import ESClient
+import realestate_core.common.class_extensions
 from realestate_core.common.utils import join_df, flatten_list
 
 from realestate_analytics.data.bq import BigQueryDatastore
@@ -25,8 +26,21 @@ from realestate_analytics.data.bq import BigQueryDatastore
 from dotenv import load_dotenv, find_dotenv
 
 celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
-celery.conf.worker_cancel_long_running_tasks_on_connection_loss = True
+# celery.conf.worker_cancel_long_running_tasks_on_connection_loss = True
+
+# Set log level for the Celery app
+celery.conf.update(
+  task_acks_late=True,
+  worker_cancel_long_running_tasks_on_connection_loss=True,
+  task_acks_on_failure_or_timeout=True,
+  task_reject_on_worker_lost=True,
+  worker_log_format="%(levelname)s: %(message)s",
+  worker_task_log_format="%(levelname)s: %(message)s",
+  worker_redirect_stdouts_level='INFO'  # Redirect stdout/stderr to Celery log at ERROR level
+)
+
 celery_logger = get_task_logger(__name__)
+celery_logger.setLevel('INFO')
 
 LAST_RUN_FILE = 'celery_embed_index.last_run.log'
 
@@ -38,7 +52,7 @@ def get_last_run_time():
   except FileNotFoundError:
     # If it's the first run, use a date thats a month ago
     celery_logger.warning(f"File {LAST_RUN_FILE} not found. Using default.")
-    return datetime.now() - timedelta(days=39)
+    return datetime.now() - timedelta(days=30)
   except ValueError:
     # If the date string is invalid, also use a date far in the past
     celery_logger.warning(f"Invalid date in {LAST_RUN_FILE}. Using default.")
@@ -71,121 +85,161 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
   _df = join_df(processed_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
   listing_jsons = _df.to_dict(orient='records')
   datastore.batch_insert(listing_jsons, embedding_type=embedding_type)
+  # datastore.batch_upsert(listing_jsons, embedding_type=embedding_type)
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=3)
 def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], image_batch_size: int, text_batch_size: int, num_workers: int):
+
+  datastore, image_embeddings_df, text_embeddings_df = None, None, None
 
   # Gather environment variables for Weaviate and Elasticsearch
   _ = load_dotenv(find_dotenv())
 
-  if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
-    raise ValueError("USE_WEAVIATE not set to 'true' in .env, this task is only for Weaviate")
-  if "ES_HOST" in os.environ and "ES_PORT" in os.environ and "ES_LISTING_INDEX_NAME" in os.environ:
-    es_host = Path(os.environ["ES_HOST"])
-    es_port = Path(os.environ["ES_PORT"])
-    listing_index_name = Path(os.environ["ES_LISTING_INDEX_NAME"])
-  else:
-    raise ValueError("ES_HOST, ES_PORT and ES_LISTING_INDEX_NAME not found in .env")
+  try:
+    # if "IMG_CACHE_FOLDER" in os.environ:
+    #   img_cache_folder = Path(os.environ["IMG_CACHE_FOLDER"])
+    #   celery_logger.info(f'img_cache_folder: {img_cache_folder}')
+    # else:
+    #   raise ValueError("IMG_CACHE_FOLDER not found in .env")
+    
+    if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
+      raise ValueError("USE_WEAVIATE not set to 'true' in .env, this task is only for Weaviate")
+    if "ES_HOST" in os.environ and "ES_PORT" in os.environ and "ES_LISTING_INDEX_NAME" in os.environ:
+      es_host = Path(os.environ["ES_HOST"])
+      es_port = Path(os.environ["ES_PORT"])
+      listing_index_name = Path(os.environ["ES_LISTING_INDEX_NAME"])
+    else:
+      raise ValueError("ES_HOST, ES_PORT and ES_LISTING_INDEX_NAME not found in .env")
 
-  device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
-  celery_logger.info(f'device: {device}')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+    celery_logger.info(f'device: {device}')
 
-  last_run = get_last_run_time()
-  task_start_time = datetime.now()
+    last_run = get_last_run_time()
+    task_start_time = datetime.now()
 
-  # Initialize models
-  image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
-  text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
-  
-  # Initialize Weaviate client and datastore and Elasticsearch client
-  WEAVIATE_HOST = os.getenv("WEAVIATE_HOST")
-  WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT"))
-  celery_logger.info(f'weaviate_host: {WEAVIATE_HOST}, weaviate_port: {WEAVIATE_PORT}')
-  client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
-  datastore = WeaviateDataStore(client=client, image_embedder=None, text_embedder=None)
+    # Initialize models
+    image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
+    text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
+    
+    # Initialize Weaviate client/datastore, and Elasticsearch client
+    # Try connect_to_local looking for WEAVIATE_HOST and WEAVIATE_PORT first, if not found
+    # then try connect_to_wcs looking for WCS_URL and WCS_API_KEY
+    WEAVIATE_HOST = os.getenv("WEAVIATE_HOST")
+    WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT")) if os.getenv("WEAVIATE_PORT") is not None else None
+    if WEAVIATE_HOST is not None and WEAVIATE_PORT is not None:
+      celery_logger.info(f'weaviate_host: {WEAVIATE_HOST}, weaviate_port: {WEAVIATE_PORT}')
+      client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
+    else:
+      WCS_URL = os.getenv("WCS_URL")
+      WCS_API_KEY = os.getenv("WCS_API_KEY")
+      if WCS_URL is None or WCS_API_KEY is None:
+        celery_logger.error('WCS_URL and WCS_API_KEY not found in .env')
+        raise Exception("WCS_URL and WCS_API_KEY not found in .env")
+      client = weaviate.connect_to_wcs(
+        cluster_url=WCS_URL,
+        auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
+      )
 
-  es = ESClient(host=es_host, port=es_port, index_name=listing_index_name, fields=es_fields)
-  if not es.ping():
-    celery_logger.info('ES is not accessible. Exiting...')
-    return
+    datastore = WeaviateDataStore(client=client, image_embedder=None, text_embedder=None)
+    if not datastore.ping():
+      celery_logger.info('Weaviate is not accessible. Exiting...')
+      return
 
-  # Resolve listings to be processed
-  img_cache_folder = Path(img_cache_folder)
-  listing_folders = img_cache_folder.lfre(r'^\d+$')
-  celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
-  if len(listing_folders) == 0:
-    celery_logger.info('No listings found. Exiting...')
-    return
-  
-  # Process images
-  pattern = r'(?<!stacked_resized_)\d+_\d+\.jpg'   # skip the stacked_resized*.jpg files
-  image_paths = flatten_list([folder.lfre(pattern) for folder in listing_folders])
-  celery_logger.info(f'# of images getting embedded: {len(image_paths)}')
-  image_embeddings_df = image_embedding_model.embed(image_paths=image_paths, 
-                                                    batch_size=image_batch_size, 
+    es = ESClient(host=es_host, port=es_port, index_name=listing_index_name, fields=es_fields)
+    if not es.ping():
+      celery_logger.info('ES is not accessible. Exiting...')
+      return
+
+    # Resolve listings to be processed
+    img_cache_folder = Path(img_cache_folder)
+    listing_folders = img_cache_folder.lfre(r'^\d+$')
+    celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
+    if len(listing_folders) == 0:
+      celery_logger.info('No listings found. Exiting...')
+      return
+    
+    # Process images
+    pattern = r'(?<!stacked_resized_)\d+_\d+\.jpg'   # skip the stacked_resized*.jpg files
+    image_paths = flatten_list([folder.lfre(pattern) for folder in listing_folders])
+    celery_logger.info(f'# of images getting embedded: {len(image_paths)}')
+    image_embeddings_df = image_embedding_model.embed(image_paths=image_paths, 
+                                                      batch_size=image_batch_size, 
+                                                      num_workers=num_workers)
+    
+    # Process text
+    listing_ids = [folder.parts[-1] for folder in listing_folders]
+    listing_df = get_listing_data(es, listing_ids, es_fields)
+
+    celery_logger.info(f'# of listings getting embedded: {len(listing_df)}')
+    text_embeddings_df = text_embedding_model.embed(df=listing_df, 
+                                                    batch_size=text_batch_size, 
+                                                    tokenize_sentences=True, 
+                                                    use_dataloader=True, 
                                                     num_workers=num_workers)
-  
-  # Process text
-  listing_ids = [folder.parts[-1] for folder in listing_folders]
-  listing_df = get_listing_data(es, listing_ids, es_fields)
+    
+    # there can be dups in image_embeddings_df and text_embeddings_df, we keep the latest
+    image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
+    image_embeddings_df.reset_index(drop=True, inplace=True)
+    text_embeddings_df.drop_duplicates(subset=['remark_chunk_id'], keep='last', inplace=True)  
+    text_embeddings_df.reset_index(drop=True, inplace=True)
 
-  celery_logger.info(f'# of listings getting embedded: {len(listing_df)}')
-  text_embeddings_df = text_embedding_model.embed(df=listing_df, 
-                                                  batch_size=text_batch_size, 
-                                                  tokenize_sentences=True, 
-                                                  use_dataloader=True, 
-                                                  num_workers=num_workers)
-  
-  # there can be dups in image_embeddings_df and text_embeddings_df, we keep the latest
-  image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
-  image_embeddings_df.reset_index(drop=True, inplace=True)
-  text_embeddings_df.drop_duplicates(subset=['remark_chunk_id'], keep='last', inplace=True)  
-  text_embeddings_df.reset_index(drop=True, inplace=True)
+    incoming_image_listingIds = set(image_embeddings_df.listing_id.unique())
+    incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
 
-  incoming_image_listingIds = set(image_embeddings_df.listing_id.unique())
-  incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
+    # Process image embeddings
+    celery_logger.info(f'Processing {len(incoming_image_listingIds)} listing image embeddings')
+    datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')  
+    process_and_batch_insert_to_datastore(
+      embeddings_df=image_embeddings_df, 
+      listingIds=incoming_image_listingIds,
+      datastore=datastore, 
+      aux_key='image_name', 
+      listing_df=listing_df, 
+      embedding_type='I'
+    )
 
-  # Process image embeddings
-  celery_logger.info(f'Processing  {len(incoming_image_listingIds)} listing image embeddings')
-  datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')  
-  process_and_batch_insert_to_datastore(
-    embeddings_df=image_embeddings_df, 
-    listingIds=incoming_image_listingIds,
-    datastore=datastore, 
-    aux_key='image_name', 
-    listing_df=listing_df, 
-    embedding_type='I'
-  )
+    # Process text embeddings
+    celery_logger.info(f'Processing {len(incoming_text_listingIds)} listing text embeddings')
+    datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
+    process_and_batch_insert_to_datastore(
+      embeddings_df=text_embeddings_df, 
+      listingIds=incoming_text_listingIds, 
+      datastore=datastore, 
+      aux_key='remark_chunk_id', 
+      listing_df=listing_df, 
+      embedding_type='T'
+    )
 
-  # Process text embeddings
-  celery_logger.info(f'Processing {len(incoming_text_listingIds)} listing text embeddings')
-  datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
-  process_and_batch_insert_to_datastore(
-    embeddings_df=text_embeddings_df, 
-    listingIds=incoming_text_listingIds, 
-    datastore=datastore, 
-    aux_key='remark_chunk_id', 
-    listing_df=listing_df, 
-    embedding_type='T'
-  )
+    # remove deleted (delisted, sold, or inactive) listings from Weaviate
+    bq_datastore = BigQueryDatastore()   # figure this out from big query
+    deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
+    if len(deleted_listings_df) > 0:
+      deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
+      celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate')
+      datastore.delete_listings(listing_ids=deleted_listing_ids)
+    
+    set_last_run_time(task_start_time)
 
-  # remove deleted (delisted, sold, or inactive) listings from Weaviate
-  bq_datastore = BigQueryDatastore()   # figure this out from big query
-  deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
-  if len(deleted_listings_df) > 0:
-    deleted_listing_ids = deleted_listings_df['listingId'].tolist()
-    celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate')
-    datastore.delete_listings(listing_ids=deleted_listing_ids)
-  
-  set_last_run_time(task_start_time)
+    # """
+    # delete all processed listing folders
+    for folder in listing_folders:
+      # shutil.rmtree(folder)    # TODO reanable later
+      shutil.move(folder, img_cache_folder/'done')
+    # """
 
-  """
-  # delete all processed listing folders
-  for folder in listing_folders:
-    shutil.rmtree(folder)
-  """
+  except Exception as e:
+    celery_logger.error(f"Error: {str(e)}")
+    
+    # if there's an error, try save the embeddings
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
-  datastore.close()
+    if image_embeddings_df is not None and not image_embeddings_df.empty:
+      image_embeddings_df.to_feather(img_cache_folder/f'image_embeddings_{timestamp}_df')
+    if text_embeddings_df is not None and not text_embeddings_df.empty:
+      text_embeddings_df.to_feather(img_cache_folder/f'text_embeddings_{timestamp}_df')
+  finally:
+    if datastore:
+      datastore.close()
 
   return "Embedding and indexing completed successfully"
 
