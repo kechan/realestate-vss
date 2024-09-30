@@ -96,11 +96,6 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
   _ = load_dotenv(find_dotenv())
 
   try:
-    # if "IMG_CACHE_FOLDER" in os.environ:
-    #   img_cache_folder = Path(os.environ["IMG_CACHE_FOLDER"])
-    #   celery_logger.info(f'img_cache_folder: {img_cache_folder}')
-    # else:
-    #   raise ValueError("IMG_CACHE_FOLDER not found in .env")
     
     if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
       raise ValueError("USE_WEAVIATE not set to 'true' in .env, this task is only for Weaviate")
@@ -223,8 +218,8 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     # """
     # delete all processed listing folders
     for folder in listing_folders:
-      # shutil.rmtree(folder)    # TODO reanable later
-      shutil.move(folder, img_cache_folder/'done')
+      shutil.rmtree(folder)    
+      # shutil.move(folder, img_cache_folder/'done')
     # """
 
   except Exception as e:
