@@ -52,11 +52,11 @@ def get_last_run_time():
   except FileNotFoundError:
     # If it's the first run, use a date thats a month ago
     celery_logger.warning(f"File {LAST_RUN_FILE} not found. Using default.")
-    return datetime.now() - timedelta(days=30)
+    return datetime.now() - timedelta(days=5)
   except ValueError:
     # If the date string is invalid, also use a date far in the past
     celery_logger.warning(f"Invalid date in {LAST_RUN_FILE}. Using default.")
-    return datetime.now() - timedelta(days=30)
+    return datetime.now() - timedelta(days=5)
 
 def set_last_run_time(a_datetime: datetime):
   with open(LAST_RUN_FILE, 'w') as f:

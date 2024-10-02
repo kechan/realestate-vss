@@ -550,7 +550,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     Delete objects related to multiple listing_ids and embedding_type.
     If embedding_type is None, delete all objects related to the listing_ids.
     """
-    for listing_id in listing_ids:
+    for listing_id in tqdm(listing_ids):
       self.delete_listing(listing_id, embedding_type=embedding_type)
 
   def count_all(self) -> int:
