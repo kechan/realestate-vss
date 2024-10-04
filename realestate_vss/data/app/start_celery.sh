@@ -1,4 +1,13 @@
-#!/bin/zsh
+#!/usr/bin/env sh
+
+if [ -n "$ZSH_VERSION" ]; then
+  echo "Running with Zsh"
+elif [ -n "$BASH_VERSION" ]; then
+  echo "Running with Bash"
+else
+  echo "Running with another shell, assuming compatibility"
+fi
+
 # ps aux | grep 'celery' | awk '{print $2}' | xargs kill -9
 
 celery -A celery_unstack.celery worker --loglevel=info --logfile=celery_unstack.log -Q unstack_queue --detach --hostname=unstack_worker@%h
