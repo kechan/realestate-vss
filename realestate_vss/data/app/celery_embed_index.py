@@ -135,6 +135,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     celery_logger.info(f'device: {device}')
 
     last_run = get_last_run_time()
+    celery_logger.info(f'Last run time: {last_run}')
     
     # Initialize models
     image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
@@ -286,7 +287,9 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       datastore.close()
 
     task_end_time = datetime.now()
-    log_run(task_start_time, task_end_time, task_status)
+    # don't log if there's no listing and the status is Failed, these are mostly likely rerun due to timeout with rabbitmq
+    if not (task_status == "Failed" and error_message is None and len(listing_folders) == 0):
+      log_run(task_start_time, task_end_time, task_status)
 
     if task_status == "Completed":
       # Remove the temporary embedding files
