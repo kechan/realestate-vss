@@ -21,7 +21,7 @@ from celery_embed_index import embed_and_index_task
 # echo "weak-loops-prove.loca.lt" > non_ml_host
 # gsutil cp non_ml_host gs://ai-tests/tmp 
 
-# uvicorn data_collection_endpt:app --port 8005 --reload
+# uvicorn data_collection_endpt:app --port 8001 --reload
 
 listing_fields = ['jumpId', 'city', 'provState', 'postalCode', 'lat', 'lng', 'streetName',
                   'beds', 'bedsInt', 'baths', 'bathsInt', 'sizeInterior',
@@ -97,12 +97,15 @@ async def submit_listing_jsons(body: bytes = Body(...), start_date: Optional[str
   except Exception as e:
     raise HTTPException(status_code=400, detail=f"Error processing data: {str(e)}")
 
+''' Not needed for now
 @app.get("/remove_all_embed_listings_task_id")
 async def remove_all_embed_listings_task_id():
   remove_all_embed_listings_task_ids.apply_async(args=[], queue='embed_queue')
 
   return JSONResponse(content={"message": "Removing all embed listings task ids from Redis."})
+''' 
 
+''' we will do /embed and /update_vec_index in one step by /embed_and_index
 @app.get("/embed")
 async def embed():
   # embed all the images under img_cache_folder
@@ -120,7 +123,7 @@ async def update_vec_index():
   update_embeddings.apply_async(args=[str(img_cache_folder)], queue='update_embed_queue')
 
   return JSONResponse(content={"message": "Updating vector index."})
-
+'''
 
 @app.get("/embed_and_index")
 async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4)):

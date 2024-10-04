@@ -91,6 +91,9 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
 def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], image_batch_size: int, text_batch_size: int, num_workers: int):
 
   datastore, image_embeddings_df, text_embeddings_df = None, None, None
+  task_status = "Failed"
+  error_message = None
+  img_cache_folder = Path(img_cache_folder)
 
   # Gather environment variables for Weaviate and Elasticsearch
   _ = load_dotenv(find_dotenv())
@@ -127,9 +130,12 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     else:
       WCS_URL = os.getenv("WCS_URL")
       WCS_API_KEY = os.getenv("WCS_API_KEY")
+      celery_logger.info(f'From .env, wcs_url: {WCS_URL}, wcs_api_key: {WCS_API_KEY}')
+
       if WCS_URL is None or WCS_API_KEY is None:
         celery_logger.error('WCS_URL and WCS_API_KEY not found in .env')
         raise Exception("WCS_URL and WCS_API_KEY not found in .env")
+      
       client = weaviate.connect_to_wcs(
         cluster_url=WCS_URL,
         auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
@@ -145,44 +151,54 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       celery_logger.info('ES is not accessible. Exiting...')
       return
 
-    # Resolve listings to be processed
-    img_cache_folder = Path(img_cache_folder)
-    listing_folders = img_cache_folder.lfre(r'^\d+$')
-    celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
-    if len(listing_folders) == 0:
-      celery_logger.info('No listings found. Exiting...')
-      return
-    
-    # Process images
-    pattern = r'(?<!stacked_resized_)\d+_\d+\.jpg'   # skip the stacked_resized*.jpg files
-    image_paths = flatten_list([folder.lfre(pattern) for folder in listing_folders])
-    celery_logger.info(f'# of images getting embedded: {len(image_paths)}')
-    image_embeddings_df = image_embedding_model.embed(image_paths=image_paths, 
-                                                      batch_size=image_batch_size, 
-                                                      num_workers=num_workers)
-    
-    # Process text
-    listing_ids = [folder.parts[-1] for folder in listing_folders]
-    listing_df = get_listing_data(es, listing_ids, es_fields)
+    # check for existing embedding files (if last run has exceptions and failed to complete)
+    image_embeddings_file = img_cache_folder / 'image_embeddings_df'
+    text_embeddings_file = img_cache_folder / 'text_embeddings_df'
 
-    celery_logger.info(f'# of listings getting embedded: {len(listing_df)}')
-    text_embeddings_df = text_embedding_model.embed(df=listing_df, 
-                                                    batch_size=text_batch_size, 
-                                                    tokenize_sentences=True, 
-                                                    use_dataloader=True, 
-                                                    num_workers=num_workers)
-    
-    # there can be dups in image_embeddings_df and text_embeddings_df, we keep the latest
-    image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
-    image_embeddings_df.reset_index(drop=True, inplace=True)
-    text_embeddings_df.drop_duplicates(subset=['remark_chunk_id'], keep='last', inplace=True)  
-    text_embeddings_df.reset_index(drop=True, inplace=True)
+    if image_embeddings_file.exists() and text_embeddings_file.exists():
+      celery_logger.info(f"Loading existing embedding files")
+      image_embeddings_df = pd.read_feather(image_embeddings_file)
+      text_embeddings_df = pd.read_feather(text_embeddings_file)
+    else:
+
+      # Resolve listings to be processed    
+      listing_folders = img_cache_folder.lfre(r'^\d+$')
+      celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
+      if len(listing_folders) == 0:
+        celery_logger.info('No listings found. Exiting...')
+        return
+      
+      # Process images
+      pattern = r'(?<!stacked_resized_)\d+_\d+\.jpg'   # skip the stacked_resized*.jpg files
+      image_paths = flatten_list([folder.lfre(pattern) for folder in listing_folders])
+      celery_logger.info(f'# of images getting embedded: {len(image_paths)}')
+      image_embeddings_df = image_embedding_model.embed(image_paths=image_paths, 
+                                                        batch_size=image_batch_size, 
+                                                        num_workers=num_workers)
+      
+      # Process text
+      listing_ids = [folder.parts[-1] for folder in listing_folders]
+      listing_df = get_listing_data(es, listing_ids, es_fields)
+
+      celery_logger.info(f'# of listings getting embedded: {len(listing_df)}')
+      text_embeddings_df = text_embedding_model.embed(df=listing_df, 
+                                                      batch_size=text_batch_size, 
+                                                      tokenize_sentences=True, 
+                                                      use_dataloader=True, 
+                                                      num_workers=num_workers)
+      
+      # there can be dups in image_embeddings_df and text_embeddings_df, we keep the latest
+      image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
+      image_embeddings_df.reset_index(drop=True, inplace=True)
+      text_embeddings_df.drop_duplicates(subset=['remark_chunk_id'], keep='last', inplace=True)  
+      text_embeddings_df.reset_index(drop=True, inplace=True)
 
     incoming_image_listingIds = set(image_embeddings_df.listing_id.unique())
     incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
 
     # Process image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listing image embeddings')
+    celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
     datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')  
     process_and_batch_insert_to_datastore(
       embeddings_df=image_embeddings_df, 
@@ -195,7 +211,8 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     # Process text embeddings
     celery_logger.info(f'Processing {len(incoming_text_listingIds)} listing text embeddings')
-    datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
+    celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
+    datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')    
     process_and_batch_insert_to_datastore(
       embeddings_df=text_embeddings_df, 
       listingIds=incoming_text_listingIds, 
@@ -210,33 +227,53 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
     if len(deleted_listings_df) > 0:
       deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
-      celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate')
-      datastore.delete_listings(listing_ids=deleted_listing_ids)
+      celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
+      # datastore.delete_listings(listing_ids=deleted_listing_ids)
+      datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10)
     
     set_last_run_time(task_start_time)
 
-    # """
     # delete all processed listing folders
-    for folder in listing_folders:
-      shutil.rmtree(folder)    
-      # shutil.move(folder, img_cache_folder/'done')
-    # """
+    # for folder in listing_folders:
+    processed_listing_ids = incoming_image_listingIds.union(incoming_text_listingIds)
+    for listing_id in processed_listing_ids:
+      listing_folder_path = img_cache_folder / str(listing_id)
+      try:
+        shutil.rmtree(listing_folder_path)    
+        # shutil.move(listing_folder_path, img_cache_folder/'done')   # TODO: for dev temporarily
+      except Exception as e:
+        celery_logger.warning(f'Unable to remove {listing_folder_path}')
+
+    task_status = "Completed"
+
 
   except Exception as e:
     celery_logger.error(f"Error: {str(e)}")
+    error_message = str(e)
     
     # if there's an error, try save the embeddings
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
     if image_embeddings_df is not None and not image_embeddings_df.empty:
-      image_embeddings_df.to_feather(img_cache_folder/f'image_embeddings_{timestamp}_df')
+      image_embeddings_df.to_feather(image_embeddings_file)
     if text_embeddings_df is not None and not text_embeddings_df.empty:
-      text_embeddings_df.to_feather(img_cache_folder/f'text_embeddings_{timestamp}_df')
+      text_embeddings_df.to_feather(text_embeddings_file)
   finally:
     if datastore:
       datastore.close()
 
-  return "Embedding and indexing completed successfully"
+    if task_status == "Completed":
+      # Remove the temporary embedding files
+      for file in [image_embeddings_file, text_embeddings_file]:
+        if file.exists():
+          try:
+            file.unlink()
+          except Exception as e:
+            celery_logger.warning(f"Failed to delete {file}: {str(e)}")
+      return {"status": "Completed", "message": "Embedding and indexing completed successfully"}
+    else:
+      return {"status": "Failed", "error": error_message}
+
 
 def get_listing_data(es: ESClient, listing_ids: List[str], es_fields: List[str]) -> pd.DataFrame:
   # Get listing info from ES using listing_ids
