@@ -8,6 +8,8 @@ from pathlib import Path
 import pandas as pd
 
 import weaviate
+from weaviate.classes.init import AdditionalConfig, Timeout
+
 import torch
 
 from realestate_vss.models.embedding import OpenClipImageEmbeddingModel, OpenClipTextEmbeddingModel
@@ -43,6 +45,7 @@ celery_logger = get_task_logger(__name__)
 celery_logger.setLevel('INFO')
 
 LAST_RUN_FILE = 'celery_embed_index.last_run.log'
+RUN_LOG_FILE = 'celery_embed_index.run_log.csv'
 
 def get_last_run_time():
   try:
@@ -61,6 +64,24 @@ def get_last_run_time():
 def set_last_run_time(a_datetime: datetime):
   with open(LAST_RUN_FILE, 'w') as f:
     f.write(a_datetime.isoformat())
+
+def log_run(start_time: datetime, end_time: Optional[datetime], status: str):
+  duration = (end_time - start_time).total_seconds()
+
+  run_log_path = Path(RUN_LOG_FILE)
+  run_data = {
+    'start_time': [start_time],
+    'end_time': [end_time],
+    'status': [status],
+    'duration': [duration]
+  }
+  run_df = pd.DataFrame(run_data)
+  if run_log_path.exists():
+    existing_df = pd.read_csv(run_log_path)
+    updated_df = pd.concat([existing_df, run_df], ignore_index=True)
+  else:
+    updated_df = run_df
+  updated_df.to_csv(run_log_path, index=False)
 
 def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame, 
                        listingIds: List[str], 
@@ -97,6 +118,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
   # Gather environment variables for Weaviate and Elasticsearch
   _ = load_dotenv(find_dotenv())
+  task_start_time = datetime.now()
 
   try:
     
@@ -113,8 +135,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     celery_logger.info(f'device: {device}')
 
     last_run = get_last_run_time()
-    task_start_time = datetime.now()
-
+    
     # Initialize models
     image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
     text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
@@ -136,7 +157,10 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
         celery_logger.error('WCS_URL and WCS_API_KEY not found in .env')
         raise Exception("WCS_URL and WCS_API_KEY not found in .env")
       
+      # TODO: additional config is to resolve slow network issues, investigate if we should keep it for production
       client = weaviate.connect_to_wcs(
+        additional_config=AdditionalConfig(timeout=Timeout(init=30, query=60, insert=120)),
+        # skip_init_checks=True,
         cluster_url=WCS_URL,
         auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
       )
@@ -160,7 +184,6 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       image_embeddings_df = pd.read_feather(image_embeddings_file)
       text_embeddings_df = pd.read_feather(text_embeddings_file)
     else:
-
       # Resolve listings to be processed    
       listing_folders = img_cache_folder.lfre(r'^\d+$')
       celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
@@ -261,6 +284,9 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
   finally:
     if datastore:
       datastore.close()
+
+    task_end_time = datetime.now()
+    log_run(task_start_time, task_end_time, task_status)
 
     if task_status == "Completed":
       # Remove the temporary embedding files

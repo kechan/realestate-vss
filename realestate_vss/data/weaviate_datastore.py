@@ -9,6 +9,8 @@ import pandas as pd
 
 from tqdm.auto import tqdm
 
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 from ..data.index import FaissIndex
@@ -24,6 +26,13 @@ except ImportError:
   raise NotImplementedError("This class is only compatible with weaviate-client v4")
 
 import logging
+
+RETRY_SETTINGS = {
+    "stop": stop_after_attempt(3),
+    "wait": wait_exponential(multiplier=1, min=2, max=10),
+    "retry": retry_if_exception_type(UnexpectedStatusCodeError),
+    "reraise": True
+}
 
 class WeaviateDataStore:
   def __init__(self,
@@ -522,6 +531,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
        # Delete each collection, which also removes all its data objects
       self.client.collections.delete(name)
 
+  @retry(**RETRY_SETTINGS)
   def delete_listing(self, listing_id: str, embedding_type: str = None):
     """
     Delete all objects related to a listing_id and embedding_type
@@ -552,6 +562,28 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     """
     for listing_id in tqdm(listing_ids):
       self.delete_listing(listing_id, embedding_type=embedding_type)
+
+  def delete_listings_by_batch(self, listing_ids: List[str], embedding_type: str = None, batch_size: int = 100):
+    """
+    Delete objects related to multiple listing_ids and embedding_type by batch of batch_size.
+    If embedding_type is None, delete all objects related to the listing_ids.
+    """
+    if embedding_type == 'I' or embedding_type is None:
+      collection = self.client.collections.get("Listing_Image")
+      for i in tqdm(range(0, len(listing_ids), batch_size)):
+        batch_ids = listing_ids[i:i+batch_size]
+        collection.data.delete_many(
+          where=Filter.by_property("listing_id").contains_any(batch_ids)
+        )
+    
+    if embedding_type == 'T' or embedding_type is None:
+      collection = self.client.collections.get("Listing_Text")
+      for i in tqdm(range(0, len(listing_ids), batch_size)):
+        batch_ids = listing_ids[i:i+batch_size]
+        collection.data.delete_many(
+          where=Filter.by_property("listing_id").contains_any(batch_ids)
+        )
+
 
   def count_all(self) -> int:
     count = 0
@@ -678,6 +710,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       self.logger.error(f"Error upserting object: {e}")
       return None
 
+  @retry(**RETRY_SETTINGS)
   def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I'):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     collection = self.client.collections.get(collection_name)
@@ -699,7 +732,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     except Exception as e:
       self.logger.error(f"Error batch inserting objects: {e}")
 
-
+  @retry(**RETRY_SETTINGS)
   def batch_upsert(self, listings: Iterable[Dict], embedding_type: str = 'I'):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     collection = self.client.collections.get(collection_name)
@@ -726,7 +759,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
             )
     except Exception as e:
       self.logger.error(f"Error batch upserting objects: {e}")
-
+ 
+  @retry(**RETRY_SETTINGS)
   def _search_image_2_image(self, image: Image.Image = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'I'   # targets are images
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
@@ -765,7 +799,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
     return top_image_names, top_scores
       
-
+  @retry(**RETRY_SETTINGS)
   def _search_image_2_text(self, image: Image.Image = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'T'   # targets are text
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
@@ -804,7 +838,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
  
     return top_remark_chunk_ids, top_scores
 
-
+  @retry(**RETRY_SETTINGS)
   def _search_text_2_image(self, phrase: str = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'I'   # targets are images
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
@@ -843,6 +877,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     
     return top_image_names, top_scores
 
+  @retry(**RETRY_SETTINGS)
   def _search_text_2_text(self, phrase: str = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'T'   # targets are text
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
