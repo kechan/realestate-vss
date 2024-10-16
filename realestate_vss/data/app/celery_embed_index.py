@@ -90,7 +90,7 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
                        datastore: WeaviateDataStore,
                        aux_key: str,
                        listing_df: pd.DataFrame,
-                       embedding_type: str = 'I') -> None:
+                       embedding_type: str = 'I') -> int:
   """
   Function to process embeddings and perform operations(add/delete) on Redis or Weaviate datastore.
 
@@ -100,8 +100,9 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
   datastore (Any): The Redis/Weaviate datastore object where docs are to be added/deleted.
   aux_key (str): The column name in the DataFrame that corresponds to the auxiliary key (image name or remark chunk ID).
                  This can also be thought of as the primary key to auxilliary information.  
-  listing_df (pd.DataFrame): DataFrame containing the detail listing data.                 
+  listing_df (pd.DataFrame): DataFrame containing the detail listing data.    
 
+  Returns the number of documents inserted.
   """
   items_to_process = list(embeddings_df.q("listing_id.isin(@listingIds)")[aux_key].values)
   processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
@@ -110,6 +111,8 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
   datastore.batch_insert(listing_jsons, embedding_type=embedding_type)
   # datastore.batch_upsert(listing_jsons, embedding_type=embedding_type)
 
+  return len(listing_jsons)
+
 @celery.task(bind=True, max_retries=3)
 def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], image_batch_size: int, text_batch_size: int, num_workers: int):
 
@@ -117,6 +120,17 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
   task_status = "Failed"
   error_message = None
   img_cache_folder = Path(img_cache_folder)
+
+  # Statistics
+  stats = {
+    "total_listings_processed": 0,
+    "image_embeddings_inserted": 0,
+    "image_listings_deleted": 0,
+    "text_embeddings_inserted": 0,
+    "text_listings_deleted": 0,
+    "total_embeddings_inserted": 0,
+    "total_listings_deleted": 0
+  }
 
   # Gather environment variables for Weaviate and Elasticsearch
   _ = load_dotenv(find_dotenv())
@@ -222,14 +236,18 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     incoming_image_listingIds = set(image_embeddings_df.listing_id.unique())
     incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
 
+    stats["total_listings_processed"] = len(incoming_image_listingIds.union(incoming_text_listingIds))
+
     # Process image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listing image embeddings')
     if last_run is not None:
       celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
       datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
+      stats["image_listings_deleted"] = len(incoming_image_listingIds)
     else:
       celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
-    process_and_batch_insert_to_datastore(
+    
+    stats["image_embeddings_inserted"] = process_and_batch_insert_to_datastore(
       embeddings_df=image_embeddings_df, 
       listingIds=incoming_image_listingIds,
       datastore=datastore, 
@@ -243,9 +261,11 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     if last_run is not None:
       celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
       datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
+      stats["text_listings_deleted"] = len(incoming_text_listingIds)
     else:
       celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
-    process_and_batch_insert_to_datastore(
+
+    stats["text_embeddings_inserted"] = process_and_batch_insert_to_datastore(
       embeddings_df=text_embeddings_df, 
       listingIds=incoming_text_listingIds, 
       datastore=datastore, 
@@ -263,6 +283,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
         celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
         # datastore.delete_listings(listing_ids=deleted_listing_ids)
         datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10)
+        stats["total_listings_deleted"] = len(deleted_listing_ids)
     else:
       celery_logger.info(f'Skipping deletion of deleted listings (first run or intentional skip)')
     
@@ -279,8 +300,12 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       except Exception as e:
         celery_logger.warning(f'Unable to remove {listing_folder_path}')
 
-    task_status = "Completed"
 
+    # Calculate total statistics
+    stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]
+    stats["total_listings_deleted"] += stats["image_listings_deleted"] + stats["text_listings_deleted"]
+
+    task_status = "Completed"
 
   except Exception as e:
     celery_logger.error(f"Error: {str(e)}")
@@ -310,7 +335,10 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
             file.unlink()
           except Exception as e:
             celery_logger.warning(f"Failed to delete {file}: {str(e)}")
-      return {"status": "Completed", "message": "Embedding and indexing completed successfully"}
+      return {"status": "Completed", 
+              "message": "Embedding and indexing completed successfully",
+              "stats": stats
+              }
     else:
       return {"status": "Failed", "error": error_message}
 
