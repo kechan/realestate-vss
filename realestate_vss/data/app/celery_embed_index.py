@@ -336,11 +336,17 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
           except Exception as e:
             celery_logger.warning(f"Failed to delete {file}: {str(e)}")
       return {"status": "Completed", 
-              "message": "Embedding and indexing completed successfully",
-              "stats": stats
+              "message": "Embedding and indexing completed successfully",              
+              "stats": stats,
+              "start_time": task_start_time,
+              "end_time": task_end_time
               }
     else:
-      return {"status": "Failed", "error": error_message}
+      return {"status": "Failed", 
+              "error": error_message,
+              "start_time": task_start_time,
+              "end_time": task_end_time
+              }
 
 
 def get_listing_data(es: ESClient, listing_ids: List[str], es_fields: List[str]) -> pd.DataFrame:
