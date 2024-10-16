@@ -338,14 +338,14 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       return {"status": "Completed", 
               "message": "Embedding and indexing completed successfully",              
               "stats": stats,
-              "start_time": task_start_time,
-              "end_time": task_end_time
+              "start_time": task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
+              "end_time": task_end_time.strftime("%Y-%m-%d %H:%M:%S")
               }
     else:
       return {"status": "Failed", 
               "error": error_message,
-              "start_time": task_start_time,
-              "end_time": task_end_time
+              "start_time": task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
+              "end_time": task_end_time.strftime("%Y-%m-%d %H:%M:%S")
               }
 
 
