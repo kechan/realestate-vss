@@ -55,11 +55,13 @@ def get_last_run_time():
   except FileNotFoundError:
     # If it's the first run, use a date thats a month ago
     celery_logger.warning(f"File {LAST_RUN_FILE} not found. Using default.")
-    return datetime.now() - timedelta(days=5)
+    # return datetime.now() - timedelta(days=5)
+    return None
   except ValueError:
     # If the date string is invalid, also use a date far in the past
     celery_logger.warning(f"Invalid date in {LAST_RUN_FILE}. Using default.")
-    return datetime.now() - timedelta(days=5)
+    # return datetime.now() - timedelta(days=5)
+    return None
 
 def set_last_run_time(a_datetime: datetime):
   with open(LAST_RUN_FILE, 'w') as f:
@@ -222,8 +224,11 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     # Process image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listing image embeddings')
-    celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
-    datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')  
+    if last_run is not None:
+      celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
+      datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
+    else:
+      celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
     process_and_batch_insert_to_datastore(
       embeddings_df=image_embeddings_df, 
       listingIds=incoming_image_listingIds,
@@ -235,8 +240,11 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     # Process text embeddings
     celery_logger.info(f'Processing {len(incoming_text_listingIds)} listing text embeddings')
-    celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
-    datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')    
+    if last_run is not None:
+      celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
+      datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
+    else:
+      celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
     process_and_batch_insert_to_datastore(
       embeddings_df=text_embeddings_df, 
       listingIds=incoming_text_listingIds, 
@@ -247,13 +255,16 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     )
 
     # remove deleted (delisted, sold, or inactive) listings from Weaviate
-    bq_datastore = BigQueryDatastore()   # figure this out from big query
-    deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
-    if len(deleted_listings_df) > 0:
-      deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
-      celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
-      # datastore.delete_listings(listing_ids=deleted_listing_ids)
-      datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10)
+    if last_run is not None:
+      bq_datastore = BigQueryDatastore()   # figure this out from big query
+      deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
+      if len(deleted_listings_df) > 0:
+        deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
+        celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
+        # datastore.delete_listings(listing_ids=deleted_listing_ids)
+        datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10)
+    else:
+      celery_logger.info(f'Skipping deletion of deleted listings (first run or intentional skip)')
     
     set_last_run_time(task_start_time)
 
