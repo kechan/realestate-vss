@@ -9,7 +9,7 @@ import pandas as pd
 
 from tqdm.auto import tqdm
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, wait_fixed
 
 from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
@@ -28,8 +28,9 @@ except ImportError:
 import logging
 
 RETRY_SETTINGS = {
-    "stop": stop_after_attempt(3),
-    "wait": wait_exponential(multiplier=1, min=2, max=10),
+    "stop": stop_after_attempt(5),
+    # "wait": wait_exponential(multiplier=1, min=2, max=10),
+    "wait": wait_fixed(30),
     "retry": retry_if_exception_type(UnexpectedStatusCodeError),
     "reraise": True
 }
@@ -563,6 +564,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     for listing_id in tqdm(listing_ids):
       self.delete_listing(listing_id, embedding_type=embedding_type)
 
+  @retry(**RETRY_SETTINGS)
   def delete_listings_by_batch(self, listing_ids: List[str], embedding_type: str = None, batch_size: int = 100, sleep_time: int = 0):
     """
     Delete objects related to multiple listing_ids and embedding_type by batch of batch_size.

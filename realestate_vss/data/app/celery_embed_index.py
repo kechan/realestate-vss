@@ -117,7 +117,7 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
   processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
   _df = join_df(processed_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
   listing_jsons = _df.to_dict(orient='records')
-  datastore.batch_insert(listing_jsons, embedding_type=embedding_type, batch_size=1000, sleep_time=60)   # do we need this sleep if not for using free weaviate cloud.
+  datastore.batch_insert(listing_jsons, embedding_type=embedding_type, batch_size=1000, sleep_time=3)   # do we need this sleep if not for using free weaviate cloud.
   # datastore.batch_upsert(listing_jsons, embedding_type=embedding_type)
 
   return len(listing_jsons)
@@ -274,7 +274,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     if last_run is not None and not image_delete_marker.exists():
       celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       # datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
-      datastore.delete_listings_by_batch(listing_ids=list(incoming_image_listingIds), embedding_type='I', batch_size=10, sleep_time=30)
+      datastore.delete_listings_by_batch(listing_ids=list(incoming_image_listingIds), embedding_type='I', batch_size=10, sleep_time=3)
       celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
 
       stats["image_listings_deleted"] = len(incoming_image_listingIds)
@@ -304,7 +304,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     if last_run is not None and not text_delete_marker.exists():
       celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       # datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
-      datastore.delete_listings_by_batch(listing_ids=list(incoming_text_listingIds), embedding_type='T', batch_size=10, sleep_time=30)
+      datastore.delete_listings_by_batch(listing_ids=list(incoming_text_listingIds), embedding_type='T', batch_size=10, sleep_time=3)
       celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
 
       stats["text_listings_deleted"] = len(incoming_text_listingIds)
@@ -336,7 +336,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
         deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
         celery_logger.info(f'Begin removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
         # datastore.delete_listings(listing_ids=deleted_listing_ids)
-        datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10, sleep_time=30)
+        datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10, sleep_time=3)
         celery_logger.info(f'Ended removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
 
         stats["total_listings_deleted"] = len(deleted_listing_ids)
