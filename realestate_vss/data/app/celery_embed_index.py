@@ -205,8 +205,12 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     listing_df_file = img_cache_folder / 'listing_df'
     listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
 
-    image_delete_marker = img_cache_folder / 'image_delete_completed'  # used to mark delete for incoming image listings
+    # used to mark delete for incoming image listings
+    image_delete_marker = img_cache_folder / 'image_delete_completed'  
     text_delete_marker = img_cache_folder / 'text_delete_completed'
+    # used to mark insert for incoming image listings
+    image_insert_marker = img_cache_folder / 'image_insert_completed'
+    text_insert_marker = img_cache_folder / 'text_insert_completed'
 
     # if image_embeddings_file.exists() and text_embeddings_file.exists() and listing_df_file.exists():
     if image_embeddings_file.exists():
@@ -274,16 +278,20 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     else:
       celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
     
-    celery_logger.info("Begin batch insert image embeddings to weaviate")
-    stats["image_embeddings_inserted"] = process_and_batch_insert_to_datastore(
-      embeddings_df=image_embeddings_df, 
-      listingIds=incoming_image_listingIds,
-      datastore=datastore, 
-      aux_key='image_name', 
-      listing_df=listing_df, 
-      embedding_type='I'
-    )
-    celery_logger.info("Ended batch insert image embeddings to weaviate")
+    if not image_insert_marker.exists():
+      celery_logger.info("Begin batch insert image embeddings to weaviate")
+      stats["image_embeddings_inserted"] = process_and_batch_insert_to_datastore(
+        embeddings_df=image_embeddings_df, 
+        listingIds=incoming_image_listingIds,
+        datastore=datastore, 
+        aux_key='image_name', 
+        listing_df=listing_df, 
+        embedding_type='I'
+      )
+      celery_logger.info("Ended batch insert image embeddings to weaviate")
+      image_insert_marker.touch()
+    else:
+      celery_logger.info("Skipping batch insert of image embeddings (already inserted prior run)")
 
     # Process text embeddings
     celery_logger.info(f'Processing {len(incoming_text_listingIds)} listing text embeddings')
@@ -297,16 +305,20 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     else:
       celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
 
-    celery_logger.info("Begin batch insert text embeddings to weaviate")
-    stats["text_embeddings_inserted"] = process_and_batch_insert_to_datastore(
-      embeddings_df=text_embeddings_df, 
-      listingIds=incoming_text_listingIds, 
-      datastore=datastore, 
-      aux_key='remark_chunk_id', 
-      listing_df=listing_df, 
-      embedding_type='T'
-    )
-    celery_logger.info("Ended batch insert text embeddings to weaviate")
+    if not text_insert_marker.exists():
+      celery_logger.info("Begin batch insert text embeddings to weaviate")
+      stats["text_embeddings_inserted"] = process_and_batch_insert_to_datastore(
+        embeddings_df=text_embeddings_df, 
+        listingIds=incoming_text_listingIds, 
+        datastore=datastore, 
+        aux_key='remark_chunk_id', 
+        listing_df=listing_df, 
+        embedding_type='T'
+      )
+      celery_logger.info("Ended batch insert text embeddings to weaviate")
+      text_insert_marker.touch()
+    else:
+      celery_logger.info("Skipping batch insert of text embeddings (already inserted prior run)")
 
     # remove deleted (delisted, sold, or inactive) listings from Weaviate
     if last_run is not None:
@@ -373,7 +385,10 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     if task_status == "Completed":
       # Remove the temporary embedding files
-      for file in [image_embeddings_file, text_embeddings_file, listing_df_file, image_delete_marker, text_delete_marker, listing_folders_pickle_file]:
+      for file in [image_embeddings_file, text_embeddings_file, listing_df_file, 
+                   image_delete_marker, text_delete_marker, 
+                   image_insert_marker, text_insert_marker,
+                   listing_folders_pickle_file]:
         if file.exists():
           try:
             file.unlink()
