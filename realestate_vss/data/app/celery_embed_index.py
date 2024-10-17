@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Union, Any
-import os, shutil
+import os, shutil, gc
 from datetime import datetime, timedelta
 
 from celery import Celery
@@ -25,6 +25,10 @@ from realestate_analytics.data.bq import BigQueryDatastore
 # from elasticsearch.exceptions import NotFoundError
 # from elasticsearch.helpers import scan
 
+# Restart workers after processing a certain number of tasks to free up memory.
+# celery -A your_app worker --max-tasks-per-child=100
+
+
 from dotenv import load_dotenv, find_dotenv
 
 celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
@@ -46,6 +50,11 @@ celery_logger.setLevel('INFO')
 
 LAST_RUN_FILE = 'celery_embed_index.last_run.log'
 RUN_LOG_FILE = 'celery_embed_index.run_log.csv'
+
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+# Initialize models
+image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
+text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
 
 def get_last_run_time():
   try:
@@ -116,6 +125,8 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
 @celery.task(bind=True, max_retries=3)
 def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], image_batch_size: int, text_batch_size: int, num_workers: int):
 
+  global image_embedding_model, text_embedding_model
+
   datastore, image_embeddings_df, text_embeddings_df = None, None, None
   task_status = "Failed"
   error_message = None
@@ -146,16 +157,11 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       listing_index_name = Path(os.environ["ES_LISTING_INDEX_NAME"])
     else:
       raise ValueError("ES_HOST, ES_PORT and ES_LISTING_INDEX_NAME not found in .env")
-
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+    
     celery_logger.info(f'device: {device}')
 
     last_run = get_last_run_time()
     celery_logger.info(f'Last run time: {last_run}')
-    
-    # Initialize models
-    image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
-    text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
     
     # Initialize Weaviate client/datastore, and Elasticsearch client
     # Try connect_to_local looking for WEAVIATE_HOST and WEAVIATE_PORT first, if not found
@@ -321,6 +327,11 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
   finally:
     if datastore:
       datastore.close()
+
+    del image_embeddings_df
+    del text_embeddings_df
+    gc.collect()
+    torch.cuda.empty_cache()
 
     task_end_time = datetime.now()
     # don't log if there's no listing and the status is Failed, these are mostly likely rerun due to timeout with rabbitmq
