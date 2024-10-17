@@ -17,7 +17,7 @@ from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as Weavi
 
 from realestate_vss.data.es_client import ESClient
 import realestate_core.common.class_extensions
-from realestate_core.common.utils import join_df, flatten_list
+from realestate_core.common.utils import join_df, flatten_list, save_to_pickle, load_from_pickle
 
 from realestate_analytics.data.bq import BigQueryDatastore
 
@@ -198,19 +198,26 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       celery_logger.info('ES is not accessible. Exiting...')
       return
 
+    listing_folders = None
     # check for existing embedding files (if last run has exceptions and failed to complete)
     image_embeddings_file = img_cache_folder / 'image_embeddings_df'
     text_embeddings_file = img_cache_folder / 'text_embeddings_df'
     listing_df_file = img_cache_folder / 'listing_df'
+    listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
 
-    if image_embeddings_file.exists() and text_embeddings_file.exists() and listing_df_file.exists():
-      celery_logger.info(f"Loading existing embedding and listing files")
+    image_delete_marker = img_cache_folder / 'image_delete_completed'  # used to mark delete for incoming image listings
+    text_delete_marker = img_cache_folder / 'text_delete_completed'
+
+    # if image_embeddings_file.exists() and text_embeddings_file.exists() and listing_df_file.exists():
+    if image_embeddings_file.exists():
+      celery_logger.info(f"Loading existing image embedding file")
       image_embeddings_df = pd.read_feather(image_embeddings_file)
-      text_embeddings_df = pd.read_feather(text_embeddings_file)
-      listing_df = pd.read_feather(listing_df_file)
+      # text_embeddings_df = pd.read_feather(text_embeddings_file)
+      # listing_df = pd.read_feather(listing_df_file)
     else:
       # Resolve listings to be processed    
       listing_folders = img_cache_folder.lfre(r'^\d+$')
+      save_to_pickle(listing_folders, listing_folders_pickle_file)
       celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
       if len(listing_folders) == 0:
         celery_logger.info('No listings found. Exiting...')
@@ -219,22 +226,31 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       # Process images
       pattern = r'(?<!stacked_resized_)\d+_\d+\.jpg'   # skip the stacked_resized*.jpg files
       image_paths = flatten_list([folder.lfre(pattern) for folder in listing_folders])
-      celery_logger.info(f'# of images getting embedded: {len(image_paths)}')
+      celery_logger.info(f'Begin embedding {len(image_paths)} images')
       image_embeddings_df = image_embedding_model.embed(image_paths=image_paths, 
                                                         batch_size=image_batch_size, 
                                                         num_workers=num_workers)
-      
+      celery_logger.info(f'Ended embedding {len(image_paths)} images')
+
+    if text_embeddings_file.exists() and listing_df_file.exists():
+      celery_logger.info(f"Loading existing text embedding file")
+      text_embeddings_df = pd.read_feather(text_embeddings_file)
+      listing_df = pd.read_feather(listing_df_file)
+    else:
       # Process text
+      if listing_folders is None:
+        listing_folders = load_from_pickle(listing_folders_pickle_file)
       listing_ids = [folder.parts[-1] for folder in listing_folders]
       listing_df = get_listing_data(es, listing_ids, es_fields)
 
-      celery_logger.info(f'# of listings getting embedded: {len(listing_df)}')
+      celery_logger.info(f'Begin text embedding for {len(listing_df)} listings')
       text_embeddings_df = text_embedding_model.embed(df=listing_df, 
                                                       batch_size=text_batch_size, 
                                                       tokenize_sentences=True, 
                                                       use_dataloader=True, 
                                                       num_workers=num_workers)
-      
+      celery_logger.info(f'Ended text embedding for {len(listing_df)} listings')
+
       # there can be dups in image_embeddings_df and text_embeddings_df, we keep the latest
       image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
       image_embeddings_df.reset_index(drop=True, inplace=True)
@@ -248,13 +264,17 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     # Process image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listing image embeddings')
-    if last_run is not None:
-      celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
+    if last_run is not None and not image_delete_marker.exists():
+      celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
+      celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
+
       stats["image_listings_deleted"] = len(incoming_image_listingIds)
+      image_delete_marker.touch()
     else:
       celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
     
+    celery_logger.info("Begin batch insert image embeddings to weaviate")
     stats["image_embeddings_inserted"] = process_and_batch_insert_to_datastore(
       embeddings_df=image_embeddings_df, 
       listingIds=incoming_image_listingIds,
@@ -263,16 +283,21 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       listing_df=listing_df, 
       embedding_type='I'
     )
+    celery_logger.info("Ended batch insert image embeddings to weaviate")
 
     # Process text embeddings
     celery_logger.info(f'Processing {len(incoming_text_listingIds)} listing text embeddings')
-    if last_run is not None:
-      celery_logger.info(f'Deleting incoming listing IDs before batch_insert (reconsider if this is needed)')
+    if last_run is not None and not text_delete_marker.exists():
+      celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
+      celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
+
       stats["text_listings_deleted"] = len(incoming_text_listingIds)
+      text_delete_marker.touch()
     else:
       celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
 
+    celery_logger.info("Begin batch insert text embeddings to weaviate")
     stats["text_embeddings_inserted"] = process_and_batch_insert_to_datastore(
       embeddings_df=text_embeddings_df, 
       listingIds=incoming_text_listingIds, 
@@ -281,6 +306,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       listing_df=listing_df, 
       embedding_type='T'
     )
+    celery_logger.info("Ended batch insert text embeddings to weaviate")
 
     # remove deleted (delisted, sold, or inactive) listings from Weaviate
     if last_run is not None:
@@ -288,9 +314,11 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
       if len(deleted_listings_df) > 0:
         deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
-        celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
+        celery_logger.info(f'Begin removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
         # datastore.delete_listings(listing_ids=deleted_listing_ids)
         datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, batch_size=10)
+        celery_logger.info(f'Ended removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
+
         stats["total_listings_deleted"] = len(deleted_listing_ids)
     else:
       celery_logger.info(f'Skipping deletion of deleted listings (first run or intentional skip)')
@@ -345,7 +373,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     if task_status == "Completed":
       # Remove the temporary embedding files
-      for file in [image_embeddings_file, text_embeddings_file]:
+      for file in [image_embeddings_file, text_embeddings_file, listing_df_file, image_delete_marker, text_delete_marker, listing_folders_pickle_file]:
         if file.exists():
           try:
             file.unlink()
