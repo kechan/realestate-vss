@@ -273,7 +273,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     if last_run is not None and not image_delete_marker.exists():
       celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       # datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
-      datastore.delete_listings_by_batch(listing_ids=incoming_image_listingIds, embedding_type='I', batch_size=10)
+      datastore.delete_listings_by_batch(listing_ids=list(incoming_image_listingIds), embedding_type='I', batch_size=10)
       celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
 
       stats["image_listings_deleted"] = len(incoming_image_listingIds)
@@ -301,7 +301,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     if last_run is not None and not text_delete_marker.exists():
       celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       # datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
-      datastore.delete_listings_by_batch(listing_ids=incoming_text_listingIds, embedding_type='T', batch_size=10)
+      datastore.delete_listings_by_batch(listing_ids=list(incoming_text_listingIds), embedding_type='T', batch_size=10)
       celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
 
       stats["text_listings_deleted"] = len(incoming_text_listingIds)
