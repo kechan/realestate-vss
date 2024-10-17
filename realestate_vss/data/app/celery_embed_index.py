@@ -220,12 +220,14 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       # listing_df = pd.read_feather(listing_df_file)
     else:
       # Resolve listings to be processed    
-      listing_folders = img_cache_folder.lfre(r'^\d+$')
-      save_to_pickle(listing_folders, listing_folders_pickle_file)
+      listing_folders = img_cache_folder.lfre(r'^\d+$')      
       celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
       if len(listing_folders) == 0:
         celery_logger.info('No listings found. Exiting...')
         return
+      
+      # save listing_folders to pickle file for potential recovery use
+      save_to_pickle(listing_folders, listing_folders_pickle_file)
       
       # Process images
       pattern = r'(?<!stacked_resized_)\d+_\d+\.jpg'   # skip the stacked_resized*.jpg files
