@@ -1,5 +1,5 @@
 from typing import Any, Tuple, List, Dict, Optional, Union, Iterable
-import weaviate, uuid, math, gc
+import weaviate, uuid, math, time, gc
 from PIL import Image
 from datetime import datetime
 from dateutil import parser
@@ -711,26 +711,33 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       return None
 
   @retry(**RETRY_SETTINGS)
-  def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I'):
+  def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I', batch_size=1000, sleep_time=1):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     collection = self.client.collections.get(collection_name)
+
+    def chunks(iterable, size):
+      for i in range(0, len(iterable), size):
+        yield iterable[i:i + size]
                        
     try:
-      with collection.batch.dynamic() as batch:
-        for listing_json in tqdm(listings):
+      for batch_listings in chunks(list(listings), batch_size):
+        with collection.batch.dynamic() as batch:
+          for listing_json in tqdm(batch_listings):
 
-          listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
-          key = self._create_key(listing_json, embedding_type)
+            listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
+            key = self._create_key(listing_json, embedding_type)
 
-          vector = listing_json.pop('embedding')
+            vector = listing_json.pop('embedding')
 
-          batch.add_object(
-            properties=listing_json,
-            uuid=key,
-            vector=vector
-          )
+            batch.add_object(
+              properties=listing_json,
+              uuid=key,
+              vector=vector
+            )
+        time.sleep(sleep_time)
     except Exception as e:
       self.logger.error(f"Error batch inserting objects: {e}")
+      raise
 
   @retry(**RETRY_SETTINGS)
   def batch_upsert(self, listings: Iterable[Dict], embedding_type: str = 'I'):

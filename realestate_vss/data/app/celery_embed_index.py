@@ -117,7 +117,7 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
   processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
   _df = join_df(processed_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
   listing_jsons = _df.to_dict(orient='records')
-  datastore.batch_insert(listing_jsons, embedding_type=embedding_type)
+  datastore.batch_insert(listing_jsons, embedding_type=embedding_type, sleep_time=60)   # do we need this sleep if not for using free weaviate cloud.
   # datastore.batch_upsert(listing_jsons, embedding_type=embedding_type)
 
   return len(listing_jsons)
