@@ -563,7 +563,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     for listing_id in tqdm(listing_ids):
       self.delete_listing(listing_id, embedding_type=embedding_type)
 
-  def delete_listings_by_batch(self, listing_ids: List[str], embedding_type: str = None, batch_size: int = 100):
+  def delete_listings_by_batch(self, listing_ids: List[str], embedding_type: str = None, batch_size: int = 100, sleep_time: int = 0):
     """
     Delete objects related to multiple listing_ids and embedding_type by batch of batch_size.
     If embedding_type is None, delete all objects related to the listing_ids.
@@ -575,6 +575,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         collection.data.delete_many(
           where=Filter.by_property("listing_id").contains_any(batch_ids)
         )
+        time.sleep(sleep_time)
     
     if embedding_type == 'T' or embedding_type is None:
       collection = self.client.collections.get("Listing_Text")
@@ -583,6 +584,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         collection.data.delete_many(
           where=Filter.by_property("listing_id").contains_any(batch_ids)
         )
+        time.sleep(sleep_time)
 
 
   def count_all(self) -> int:
