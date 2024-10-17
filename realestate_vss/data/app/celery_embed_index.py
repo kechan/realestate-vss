@@ -201,11 +201,13 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     # check for existing embedding files (if last run has exceptions and failed to complete)
     image_embeddings_file = img_cache_folder / 'image_embeddings_df'
     text_embeddings_file = img_cache_folder / 'text_embeddings_df'
+    listing_df_file = img_cache_folder / 'listing_df'
 
-    if image_embeddings_file.exists() and text_embeddings_file.exists():
-      celery_logger.info(f"Loading existing embedding files")
+    if image_embeddings_file.exists() and text_embeddings_file.exists() and listing_df_file.exists():
+      celery_logger.info(f"Loading existing embedding and listing files")
       image_embeddings_df = pd.read_feather(image_embeddings_file)
       text_embeddings_df = pd.read_feather(text_embeddings_file)
+      listing_df = pd.read_feather(listing_df_file)
     else:
       # Resolve listings to be processed    
       listing_folders = img_cache_folder.lfre(r'^\d+$')
@@ -317,13 +319,16 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     celery_logger.error(f"Error: {str(e)}")
     error_message = str(e)
     
-    # if there's an error, try save the embeddings
+    # if there's an error, try save the embeddings and listing_df
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
     if image_embeddings_df is not None and not image_embeddings_df.empty:
       image_embeddings_df.to_feather(image_embeddings_file)
     if text_embeddings_df is not None and not text_embeddings_df.empty:
       text_embeddings_df.to_feather(text_embeddings_file)
+    if listing_df is not None and not listing_df.empty:
+      listing_df.to_feather(listing_df_file)
+
   finally:
     if datastore:
       datastore.close()
