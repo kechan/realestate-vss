@@ -69,6 +69,10 @@ def unstack(
 
     for img, id in zip(imgs, image_ids):
       save_img(listing_folder/f'{listingId}_{id}.jpg', img)
+
+    # Delete the stacked image after processing
+    stacked_imgs[0].unlink()
+    celery_logger.info(f"Deleted stacked image: {stacked_imgs[0]}")
   else:
     celery_logger.error(f"No stacked image found for {listingId}")
   
