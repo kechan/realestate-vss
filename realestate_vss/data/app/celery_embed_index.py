@@ -130,7 +130,14 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
   return len(listing_jsons)
 
 @celery.task(bind=True, max_retries=3)
-def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], image_batch_size: int, text_batch_size: int, num_workers: int):
+def embed_and_index_task(self, 
+                         img_cache_folder: str, 
+                         es_fields: List[str], 
+                         image_batch_size: int, 
+                         text_batch_size: int, 
+                         num_workers: int, 
+                         delete_incoming=True
+                         ):
 
   global image_embedding_model, text_embedding_model
 
@@ -148,7 +155,8 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     "text_embeddings_inserted": 0,
     "text_listings_deleted": 0,
     "total_embeddings_inserted": 0,
-    "total_listings_deleted": 0
+    "total_listings_deleted": 0,
+    "total_embeddings_deleted": 0
   }
 
   # Gather environment variables for Weaviate and Elasticsearch
@@ -278,7 +286,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     # Process image embeddings
     # Delete incoming image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listings and {image_embeddings_df.shape[0]} image embeddings')
-    if last_run is not None and not image_delete_marker.exists():
+    if delete_incoming and last_run is not None and not image_delete_marker.exists():
       celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       # datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
       datastore.delete_listings_by_batch(listing_ids=list(incoming_image_listingIds), 
@@ -311,7 +319,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     # Process text embeddings
     # Delete incoming text embeddings
     celery_logger.info(f'Processing {len(incoming_text_listingIds)} listings and {text_embeddings_df.shape[0]} text embeddings')
-    if last_run is not None and not text_delete_marker.exists():
+    if delete_incoming and last_run is not None and not text_delete_marker.exists():
       celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
       # datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
       datastore.delete_listings_by_batch(listing_ids=list(incoming_text_listingIds), 
@@ -346,15 +354,18 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
       bq_datastore = BigQueryDatastore()   # figure this out from big query
       deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
       if len(deleted_listings_df) > 0:
+        count_before_del = datastore.count_all()
         deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
         celery_logger.info(f'Begin removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
         # datastore.delete_listings(listing_ids=deleted_listing_ids)
         datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, 
                                            batch_size=10, 
                                            sleep_time=DELETE_BQ_LISTINGS_SLEEP_TIME)
+        count_after_del = datastore.count_all()
         celery_logger.info(f'Ended removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
 
         stats["total_listings_deleted"] = len(deleted_listing_ids)
+        stats["total_embeddings_deleted"] = count_before_del - count_after_del
     else:
       celery_logger.info(f'Skipping deletion of deleted listings (first run or intentional skip)')
     
@@ -374,7 +385,7 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
 
     # Calculate total statistics
     stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]
-    stats["total_listings_deleted"] += stats["image_listings_deleted"] + stats["text_listings_deleted"]
+    # stats["total_listings_deleted"] += stats["image_listings_deleted"] + stats["text_listings_deleted"]
 
     task_status = "Completed"
 
@@ -399,11 +410,18 @@ def embed_and_index_task(self, img_cache_folder: str, es_fields: List[str], imag
     del image_embeddings_df
     del text_embeddings_df
     gc.collect()
-    torch.cuda.empty_cache()
+    try:
+      if device.type == 'cuda':
+        torch.cuda.empty_cache()
+      elif device.type == 'mps':
+        torch.mps.empty_cache()
+    except Exception as e:
+      celery_logger.warning(f"Failed to empty cache: {str(e)}")
 
     task_end_time = datetime.now()
+    # TODO: consider log_run on every attempt.
     # don't log if there's no listing and the status is Failed, these are mostly likely rerun due to timeout with rabbitmq
-    if not (task_status == "Failed" and error_message is None and len(listing_folders) == 0):
+    if not (task_status == "Failed" and error_message is None and listing_folders is not None and len(listing_folders) == 0):
       log_run(task_start_time, task_end_time, task_status)
 
     if task_status == "Completed":

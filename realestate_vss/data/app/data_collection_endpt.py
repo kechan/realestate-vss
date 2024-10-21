@@ -9,6 +9,7 @@ import uvicorn
 import pandas as pd
 from dotenv import load_dotenv, find_dotenv
 
+from celery.result import AsyncResult
 from celery_unstack import unstack
 from celery_embed import embed_listings, embed_listings_from_avm, remove_all_embed_listings_task_ids
 from celery_update_embeddings import update_embeddings, update_inactive_embeddings
@@ -126,12 +127,13 @@ async def update_vec_index():
 '''
 
 @app.get("/embed_and_index")
-async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4)):
+async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4), delete_incoming: bool = Query(True)):
   task = embed_and_index_task.apply_async(args=[str(img_cache_folder), 
                                                 listing_fields, 
                                                 image_batch_size, 
                                                 text_batch_size, 
-                                                num_workers], queue='embed_index_queue')
+                                                num_workers,
+                                                delete_incoming], queue='embed_index_queue')
   
   return JSONResponse(content={"message": "Embedding and indexing task started.", "task_id": task.id})
 
@@ -145,6 +147,15 @@ async def update_inactive_vec_index():
   return JSONResponse(content={"message": "Updating inactive vector index."})
 
 
+@app.get("/task_status/{task_id}")
+async def get_task_status(task_id: str):
+  task_result = AsyncResult(task_id)
+  response = {
+      "task_id": task_id,
+      "status": task_result.status,
+      "result": task_result.result if task_result.ready() else None
+  }
+  return JSONResponse(content=response)
 
 # Run the server and reload on changes
 # if __name__ == "__main__":
