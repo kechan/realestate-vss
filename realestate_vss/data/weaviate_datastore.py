@@ -1,5 +1,5 @@
 from typing import Any, Tuple, List, Dict, Optional, Union, Iterable
-import weaviate, uuid, math, time, gc
+import weaviate, asyncio, uuid, math, time, gc
 from PIL import Image
 from datetime import datetime
 from dateutil import parser
@@ -15,7 +15,8 @@ from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 from ..data.index import FaissIndex
 
-from weaviate.exceptions import ObjectAlreadyExistsException
+from weaviate.exceptions import ObjectAlreadyExistsException, UnexpectedStatusCodeException
+from weaviate.client import WeaviateAsyncClient
 
 try:
   # for weaviate-client v4
@@ -65,9 +66,9 @@ class WeaviateDataStore:
       'listingDate', 'lastPhotoUpdate', 'lastUpdate' # Timestamps
     ]
 
-  def _create_key(self, listing_json: Dict, embedding_type: str = 'I') -> str:
+  def _create_key(self, listing_json: Dict, embedding_type: str = 'I') -> uuid.UUID:
       """
-      Create a key for a listing document based on the listing_json.
+      Create a uuid key for a listing document based on the listing_json.
       """
       if 'image_name' in listing_json.keys() and 'remark_chunk_id' in listing_json.keys():
         self.logger.error("Both 'image_name' and 'remark_chunk_id' are present in the listing_json. This is not expected.")
@@ -299,9 +300,12 @@ class WeaviateDataStore:
     scores = [result[score_key] for result in results]
     min_score = min(scores)
     max_score = max(scores)
-    for result in results:
-      result[score_key] = (result[score_key] - min_score) / (max_score - min_score)
-    return results
+    if min_score == max_score:
+      return results
+    else:
+      for result in results:
+        result[score_key] = (result[score_key] - min_score) / (max_score - min_score)
+      return results
   
   def normalize_score_list(self, scores: List[float]) -> List[float]:
     if len(scores) == 0: return scores
@@ -340,9 +344,41 @@ class WeaviateDataStore:
 
     return combined_results
 
-  def ping(self) -> bool:
+  def _get_weaviate_filters(self, **filters):
+    supported_keys = ['provState', 'city', 'bedsInt', 'bathsInt', 'price']
+
+    weaviate_filters = None
+    for k, v in filters.items():
+      if k not in supported_keys:
+        raise ValueError(f"Filter key {k} is not supported.")
+      
+      if isinstance(v, (list, tuple)) and k in ['bedsInt', 'bathsInt', 'price']:
+        if len(v) != 2 or not all(isinstance(i, (int, float, type(None))) for i in v):
+          raise ValueError(f"Filter value for {k} should be a list or tuple of two numbers or None.")
+        if weaviate_filters is None:
+          if v[0] is not None:
+            weaviate_filters = Filter.by_property(k).greater_or_equal(v[0])
+          if v[1] is not None:
+            weaviate_filters = (weaviate_filters & Filter.by_property(k).less_or_equal(v[1])) if weaviate_filters else Filter.by_property(k).less_or_equal(v[1])
+        else:
+          if v[0] is not None:
+            weaviate_filters = weaviate_filters & Filter.by_property(k).greater_or_equal(v[0])
+          if v[1] is not None:
+            weaviate_filters = weaviate_filters & Filter.by_property(k).less_or_equal(v[1])
+      else:
+        if weaviate_filters is None:
+          weaviate_filters = Filter.by_property(k).equal(v)
+        else:
+          weaviate_filters = weaviate_filters & Filter.by_property(k).equal(v)
+
+    return weaviate_filters
+
+  def _ping_impl(self) -> bool:
     return self.client.is_ready()
 
+  # TODO: verify if this works on fastAPI context, this may be complicated.
+  def ping(self) -> bool:
+    return self.client.is_ready()
 
 class WeaviateDataStore_v4(WeaviateDataStore):
   def __init__(self, 
@@ -715,6 +751,71 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       return None
 
   @retry(**RETRY_SETTINGS)
+  def raw_export_all(self, embedding_type: str) -> List[Dict]:
+    """
+    Export/dump all raw data from Weaviate without post-processing.
+    
+    Args:
+      embedding_type: Required string indicating collection type ('I' for images, 'T' for text)
+    """
+    if embedding_type not in ['I', 'T']:
+      raise ValueError("embedding_type must be either 'I' for images or 'T' for text")
+
+    collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
+    collection = self.client.collections.get(collection_name)
+    
+    exported_data = []
+    for item in tqdm(collection.iterator(include_vector=True)):
+      raw_data = {
+        **item.properties,
+        'vector': item.vector['default']
+      }
+      exported_data.append(raw_data)
+
+    return exported_data
+  
+  @retry(**RETRY_SETTINGS)
+  def raw_import_all(self, listings: Iterable[Dict], embedding_type: str, batch_size: int = 1000, sleep_time: float = 1):
+    """
+    Import raw listing data previously exported using raw_export methods.
+    Preserves data exactly as exported while assigning proper UUIDs based on listing data.
+    
+    Args:
+      raw_listings: Raw listing data as exported by raw_export methods
+      embedding_type: Required string indicating collection type ('I' for images, 'T' for text)
+      batch_size: Number of items to process in each batch
+      sleep_time: Sleep time between batches to prevent overload
+    """
+    if embedding_type not in ['I', 'T']:
+      raise ValueError("embedding_type must be either 'I' for images or 'T' for text")
+   
+    collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
+    collection = self.client.collections.get(collection_name)
+
+    def chunks(iterable, size):
+      for i in range(0, len(iterable), size):
+        yield iterable[i:i + size]
+
+    try:
+      for batch_listings in chunks(list(listings), batch_size):
+        with collection.batch.dynamic() as batch_writer:
+          for listing_json in tqdm(batch_listings):
+            
+            key = self._create_key(listing_json, embedding_type)
+            vector = listing_json.pop('vector')
+            
+            batch_writer.add_object(
+              properties=listing_json,
+              vector=vector,
+              uuid=key
+            )
+        time.sleep(sleep_time)
+    except Exception as e:
+      self.logger.error(f"Error batch inserting objects: {e}")
+      raise
+
+
+  @retry(**RETRY_SETTINGS)
   def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I', batch_size=1000, sleep_time=1):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     collection = self.client.collections.get(collection_name)
@@ -770,7 +871,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
             )
     except Exception as e:
       self.logger.error(f"Error batch upserting objects: {e}")
- 
+
   @retry(**RETRY_SETTINGS)
   def _search_image_2_image(self, image: Image.Image = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'I'   # targets are images
@@ -1113,35 +1214,6 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       return None
 
 
-  def _get_weaviate_filters(self, **filters):
-    supported_keys = ['provState', 'city', 'bedsInt', 'bathsInt', 'price']
-
-    weaviate_filters = None
-    for k, v in filters.items():
-      if k not in supported_keys:
-        raise ValueError(f"Filter key {k} is not supported.")
-      
-      if isinstance(v, (list, tuple)) and k in ['bedsInt', 'bathsInt', 'price']:
-        if len(v) != 2 or not all(isinstance(i, (int, float, type(None))) for i in v):
-          raise ValueError(f"Filter value for {k} should be a list or tuple of two numbers or None.")
-        if weaviate_filters is None:
-          if v[0] is not None:
-            weaviate_filters = Filter.by_property(k).greater_or_equal(v[0])
-          if v[1] is not None:
-            weaviate_filters = (weaviate_filters & Filter.by_property(k).less_or_equal(v[1])) if weaviate_filters else Filter.by_property(k).less_or_equal(v[1])
-        else:
-          if v[0] is not None:
-            weaviate_filters = weaviate_filters & Filter.by_property(k).greater_or_equal(v[0])
-          if v[1] is not None:
-            weaviate_filters = weaviate_filters & Filter.by_property(k).less_or_equal(v[1])
-      else:
-        if weaviate_filters is None:
-          weaviate_filters = Filter.by_property(k).equal(v)
-        else:
-          weaviate_filters = weaviate_filters & Filter.by_property(k).equal(v)
-
-    return weaviate_filters
-
   # these are methods that conform to class ListingSearchEngine interface
   # which is also expected by main.py the fastAPI app
   def get_listing(self, listing_id: str) -> Dict[str, Any]:
@@ -1164,3 +1236,515 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
     return [doc['image_name'] for doc in listing_docs]
       
+
+
+class AsyncWeaviateDataStore_v4(WeaviateDataStore):
+  def __init__(self, 
+                async_client: WeaviateAsyncClient,
+                image_embedder,
+                text_embedder,
+                score_aggregation_method = 'max'
+              ):
+    """
+    Initialize the AsyncWeaviateDataStore_v4 with an asynchronous Weaviate client.
+    
+    Args:
+        async_client (WeaviateAsyncClient): The asynchronous Weaviate client.
+        image_embedder: The image embedder instance.
+        text_embedder: The text embedder instance.
+        score_aggregation_method (str): Method to aggregate scores ('max' or 'mean').
+    """
+    super().__init__(image_embedder, text_embedder, score_aggregation_method)
+    self.client = async_client
+
+
+  async def ping(self) -> bool:
+    return await self.client.is_ready()
+  
+  def is_connected(self) -> bool:
+    return self.client.is_connected()
+
+
+  async def close(self):
+    await self.client.close()
+  
+  async def get(self, listing_id: Optional[str] = None, embedding_type: str = 'I', include_vector=False):
+    """
+    Retrieve items from Weaviate related to listing_id and embedding_type.
+    If listing_id is None, retrieve all items.
+    embedding_type: 'I' for image, 'T' for text.
+    """
+    # this should be safe as we don't expect more than 1000 items for one listing_id
+    offset, limit = 0, 1000  
+
+    collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
+    extra_properties = ['image_name'] if embedding_type == 'I' else ['remark_chunk_id']
+
+    collection = self.client.collections.get(collection_name)
+
+    # Create filter if listing_id is provided
+    if listing_id:
+      filters = Filter.by_property("listing_id").equal(listing_id) if listing_id else None
+
+    # Fetch objects with filters and a limit, if applicable
+    response = await collection.query.fetch_objects(
+      filters=filters,
+      include_vector=include_vector,
+      limit=limit  
+    )
+
+    results = []
+    for o in response.objects:    
+      listing_json = self._postprocess_listing_json(o.properties)
+      listing_json['uuid'] = o.uuid.__str__()
+
+      if include_vector:
+        listing_json['embedding'] = o.vector['default']
+
+      results.append(listing_json)
+
+    return results
+  
+  async def get_listing(self, listing_id: str) -> Dict[str, Any]:
+    """
+    Retrieve a single listing by ID, trying image embeddings first then text embeddings.
+    
+    Args:
+        listing_id (str): The ID of the listing to retrieve
+    
+    Returns:
+        Dict[str, Any]: Listing document with 'jumpId' added, or empty dict if not found
+    """
+    listing_docs = await self.get(listing_id, embedding_type='I')
+    if len(listing_docs) == 0:
+      listing_docs = await self.get(listing_id, embedding_type='T')
+      if len(listing_docs) == 0:
+        return {}
+
+    listing_doc = listing_docs[0]
+    # add jumpId
+    listing_doc['jumpId'] = listing_doc['listing_id']
+    return listing_doc
+
+  async def get_imagenames(self, listingId: str) -> List[str]:
+    """
+    Retrieve all image names for a given listing ID.
+    
+    Args:
+        listingId (str): The ID of the listing to get images for
+    
+    Returns:
+        List[str]: List of image names, or empty list if no images found
+    """
+    listing_docs = await self.get(listingId, embedding_type='I')
+    if len(listing_docs) == 0: 
+      return []
+    
+    return [doc['image_name'] for doc in listing_docs]
+  
+  @retry(**RETRY_SETTINGS)
+  async def _search(self, 
+                    embedding_type: str,
+                    image: Image.Image = None, 
+                    phrase: str = None, 
+                    embedding: List[float] = None, 
+                    topk: int = 5, 
+                    group_by_listingId: bool = False, 
+                    include_all_fields: bool = False, 
+                    **filters) -> Union[List[Dict[str, Union[str, float, List[str]]]], Tuple[List[str], List[float]]]:
+    """
+    Common search method for both image and text searches.
+    
+    Args:
+        embedding_type (str): 'I' for image-related searches or 'T' for text-related searches.
+    """
+    collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
+    collection = self.client.collections.get(collection_name)
+
+    if embedding is None:
+      if image is not None:
+        embedding = self.image_embedder.embed_from_single_image(image).flatten().tolist()
+      elif phrase is not None:
+        embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
+      else:
+        raise ValueError("Either image or phrase must be provided to generate an embedding.")
+
+    weaviate_filters = self._get_weaviate_filters(**filters)
+
+    try:
+      response = await collection.query.near_vector(
+        near_vector=embedding,
+        limit=topk,
+        return_metadata=MetadataQuery(distance=True),
+        filters=weaviate_filters
+      )
+    except UnexpectedStatusCodeError as e:
+      self.logger.error(f"Search failed: {e}")
+      raise
+
+    top_ids, top_scores = [], []
+    all_json_fields = {}
+    property_key = 'image_name' if embedding_type == 'I' else 'remark_chunk_id'
+
+    for o in response.objects:
+      top_ids.append(o.properties[property_key])
+      score = (1 - o.metadata.distance)   # such that higher score is better match
+      top_scores.append(score)
+
+      json_fields = self._postprocess_listing_json(o.properties)
+
+      listing_id = o.properties['listing_id']
+      if include_all_fields:
+        all_json_fields[listing_id] = json_fields
+      else:
+        # only incl. remarks
+        all_json_fields[listing_id] = {'remarks': json_fields['remarks']}
+
+    if group_by_listingId:
+      if embedding_type == 'I':
+        return self._image_search_groupby_listing(top_ids, top_scores, include_all_fields, all_json_fields)
+      else:
+        return self._text_search_groupby_listing(top_ids, top_scores, include_all_fields, all_json_fields)
+
+    return top_ids, top_scores
+
+
+  @retry(**RETRY_SETTINGS)
+  async def _search_image(self, 
+                          embedding_type: str,
+                          image: Image.Image = None, 
+                          embedding: List[float] = None, 
+                          topk: int = 5, 
+                          group_by_listingId: bool = False, 
+                          include_all_fields: bool = False, 
+                          **filters) -> Union[List[Dict[str, Union[str, float, List[str]]]], Tuple[List[str], List[float]]]:
+    return await self._search(
+      embedding_type=embedding_type,
+      image=image,
+      embedding=embedding,
+      topk=topk,
+      group_by_listingId=group_by_listingId,
+      include_all_fields=include_all_fields,
+      **filters
+    )
+  
+
+  @retry(**RETRY_SETTINGS)
+  async def _search_text(self, 
+                         embedding_type: str,
+                         phrase: str = None, 
+                         embedding: List[float] = None, 
+                         topk: int = 5, 
+                         group_by_listingId: bool = False, 
+                         include_all_fields: bool = False, 
+                         **filters) -> Union[List[Dict[str, Union[str, float, List[str]]]], Tuple[List[str], List[float]]]:
+    return await self._search(
+      embedding_type=embedding_type,
+      phrase=phrase,
+      embedding=embedding,
+      topk=topk,
+      group_by_listingId=group_by_listingId,
+      include_all_fields=include_all_fields,
+      **filters
+    )
+  
+
+  @retry(**RETRY_SETTINGS)
+  async def _search_image_2_image(self, 
+                                  image: Image.Image = None, 
+                                  embedding: List[float] = None, 
+                                  topk: int = 5, 
+                                  group_by_listingId: bool = False, 
+                                  include_all_fields: bool = False, 
+                                  **filters):
+    
+    if group_by_listingId:
+      listings = await self._search_image(
+        embedding_type='I',
+        image=image,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return listings
+    else:
+      top_image_names, top_scores = await self._search_image(
+        embedding_type='I',
+        image=image,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return top_image_names, top_scores
+    
+  
+  @retry(**RETRY_SETTINGS)
+  async def _search_image_2_text(self, 
+                                 image: Image.Image = None, 
+                                 embedding: List[float] = None, 
+                                 topk: int = 5, 
+                                 group_by_listingId: bool = False, 
+                                 include_all_fields: bool = False, 
+                                 **filters):
+    if group_by_listingId:
+      listings = await self._search_image(
+        embedding_type='T',
+        image=image,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return listings
+    else:
+      top_remark_chunk_ids, top_scores = await self._search_image(
+        embedding_type='T',
+        image=image,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return top_remark_chunk_ids, top_scores
+
+
+  @retry(**RETRY_SETTINGS)
+  async def _search_text_2_image(self, 
+                                 phrase: str = None, 
+                                 embedding: List[float] = None, 
+                                 topk: int = 5, 
+                                 group_by_listingId: bool = False, 
+                                 include_all_fields: bool = False, 
+                                 **filters):
+    if group_by_listingId:
+      listings = await self._search_text(
+        embedding_type='I',
+        phrase=phrase,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return listings
+    else:
+      top_image_names, top_scores = await self._search_text(
+        embedding_type='I',
+        phrase=phrase,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return top_image_names, top_scores
+  
+
+  @retry(**RETRY_SETTINGS)
+  async def _search_text_2_text(self, 
+                                phrase: str = None, 
+                                embedding: List[float] = None, 
+                                topk: int = 5, 
+                                group_by_listingId: bool = False, 
+                                include_all_fields: bool = False, 
+                                **filters):
+    if group_by_listingId:
+      listings = await self._search_text(
+        embedding_type='T',
+        phrase=phrase,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return listings
+    else:
+      top_remark_chunk_ids, top_scores = await self._search_text(
+        embedding_type='T',
+        phrase=phrase,
+        embedding=embedding,
+        topk=topk,
+        group_by_listingId=group_by_listingId,
+        include_all_fields=include_all_fields,
+        **filters
+      )
+      return top_remark_chunk_ids, top_scores
+    
+  @retry(**RETRY_SETTINGS)
+  async def search(self,
+                    image: Image.Image = None,
+                    image_embedding: List[float] = None,
+                    phrase: str = None,
+                    text_embedding: List[float] = None,
+                    topk: int = 5,
+                    group_by_listingId: bool = False,
+                    include_all_fields: bool = False,
+                    **filters) -> Union[List[Dict[str, Union[str, float, List[str]]]], Tuple[List[str], List[float]]]:
+    """
+    Asynchronously perform a search based on image and/or text queries.
+    
+    Args:
+        image (Image.Image, optional): Image to search with.
+        image_embedding (List[float], optional): Precomputed image embedding.
+        phrase (str, optional): Text phrase to search with.
+        text_embedding (List[float], optional): Precomputed text embedding.
+        topk (int, optional): Number of top results to return.
+        group_by_listingId (bool, optional): Whether to group results by listing ID.
+        include_all_fields (bool, optional): Whether to include all fields in the results.
+        **filters: Additional filters for the search.
+    
+    Returns:
+        Union[List[Dict], Tuple[List[str], List[float]]]: Search results.
+    """
+    if (not image and not phrase) and (not image_embedding and not text_embedding):
+      if group_by_listingId:
+        return []
+      else:
+        return [], []
+
+    listing_info = {}
+    combined_results = []
+    if image or image_embedding:
+      if image_embedding is None:
+        image_embedding = self.image_embedder.embed_from_single_image(image).flatten().tolist()
+
+      listings_image_image = await self._search_image_2_image(embedding=image_embedding, topk=topk, 
+                                                      group_by_listingId=group_by_listingId, 
+                                                      include_all_fields=include_all_fields, 
+                                                      **filters)
+    
+      listings_image_text = await self._search_image_2_text(embedding=image_embedding, topk=topk,
+                                                    group_by_listingId=group_by_listingId,
+                                                    include_all_fields=include_all_fields,
+                                                    **filters)
+
+      if include_all_fields:
+        # Strip out fields and store them separately in listing_info
+        for listing in listings_image_image + listings_image_text:
+          listing_info[listing['listingId']] = {k: v for k, v in listing.items() if k not in ['listingId', 'agg_score', 'remarks', 'image_names', 'image_name', 'embeddingType']}
+          for key in list(listing.keys()):
+            if key not in ['listingId', 'agg_score', 'remarks', 'image_names', 'remark_chunk_ids']:
+              del listing[key]
+
+      if group_by_listingId:        
+        listings_image_image = self.normalize_scores(listings_image_image, 'agg_score')
+        listings_image_text = self.normalize_scores(listings_image_text, 'agg_score')
+        combined_results = self.merge_results(listings_image_text, listings_image_image)
+      else:
+        top_item_names, top_scores = listings_image_text
+        top_scores = self.normalize_score_list(top_scores)
+
+        top_item_names_2, top_scores_2 = listings_image_image
+        top_scores_2 = self.normalize_score_list(top_scores_2)
+
+        top_item_names += top_item_names_2
+        top_scores += top_scores_2
+
+    combined_results_2 = []
+    if phrase or text_embedding:
+      if text_embedding is None:
+        text_embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
+
+      listings_text_image = await self._search_text_2_image(embedding=text_embedding, topk=topk,
+                                                    group_by_listingId=group_by_listingId,
+                                                    include_all_fields=include_all_fields,
+                                                    **filters)
+    
+      listings_text_text = await self._search_text_2_text(embedding=text_embedding, topk=topk,
+                                                  group_by_listingId=group_by_listingId,
+                                                  include_all_fields=include_all_fields,
+                                                  **filters)
+    
+      if include_all_fields:
+        # Strip out fields and store them separately in listing_info
+        for listing in listings_text_image + listings_text_text:
+          listing_info[listing['listingId']] = {k: v for k, v in listing.items() if k not in ['listingId', 'agg_score', 'remarks', 'image_names', 'image_name', 'embeddingType']}
+          for key in list(listing.keys()):
+            if key not in ['listingId', 'agg_score', 'remarks', 'image_names', 'remark_chunk_ids']:
+              del listing[key]
+
+      if group_by_listingId:
+        listings_text_image = self.normalize_scores(listings_text_image, 'agg_score')
+        listings_text_text = self.normalize_scores(listings_text_text, 'agg_score')
+        combined_results_2 += self.merge_results(listings_text_text, listings_text_image)
+      else:
+        top_item_names_3, top_scores_3 = listings_text_image
+        top_scores_3 = self.normalize_score_list(top_scores_3)
+
+        top_item_names_4, top_scores_4 = listings_text_text
+        top_scores_4 = self.normalize_score_list(top_scores_4)
+
+        top_item_names += top_item_names_3
+        top_scores += top_scores_3
+        top_item_names += top_item_names_4
+        top_scores += top_scores_4
+
+    combined_results += combined_results_2
+
+    if group_by_listingId:
+      combined_results.sort(key=lambda x: x['agg_score'], reverse=True)
+      if not include_all_fields:
+        return combined_results
+      else:
+        # For each result, add the stripped out fields
+        for result in combined_results:
+          result.update(listing_info[result['listingId']])
+        return combined_results
+    else:
+      if not top_item_names:
+        return [], []
+      # Sort tuples by score in descending order
+      sorted_items = sorted(zip(top_item_names, top_scores), key=lambda x: x[1], reverse=True)
+      top_item_names, top_scores = zip(*sorted_items) if sorted_items else ([], [])
+      return list(top_item_names), list(top_scores)
+    
+
+  @retry(**RETRY_SETTINGS)
+  async def multi_image_search(self, 
+                                images: List[Image.Image],
+                                phrase: str = None,
+                                topk: int = 5,
+                                group_by_listingId: bool = False,
+                                include_all_fields: bool = False,
+                                **filters
+                                ) -> Union[List[Dict[str, Union[str, float, List[str]]]], Tuple[List[str], List[float]]]:
+    """
+    Asynchronously perform a search using multiple images and an optional phrase.
+    
+    Args:
+        images (List[Image.Image]): List of images to search with.
+        phrase (str, optional): Text phrase to search with.
+        topk (int, optional): Number of top results to return.
+        group_by_listingId (bool, optional): Whether to group results by listing ID.
+        include_all_fields (bool, optional): Whether to include all fields in the results.
+        **filters: Additional filters for the search.
+    
+    Returns:
+        Union[List[Dict], Tuple[List[str], List[float]]]: Search results.
+    """
+    self.logger.info(f'Number of images: {len(images)}')
+    all_image_embeddings = []
+    for image in images:
+      image_embedding = self.image_embedder.embed_from_single_image(image)
+      all_image_embeddings.append(image_embedding)
+    mean_vector = np.mean(all_image_embeddings, axis=0)
+
+    image_embedding = mean_vector.flatten().tolist()
+
+    text_embedding = None
+    if phrase:
+      text_embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
+
+    return await self.search(image_embedding=image_embedding, 
+                        text_embedding=text_embedding, 
+                        topk=topk, 
+                        group_by_listingId=group_by_listingId, 
+                        include_all_fields=include_all_fields, 
+                        **filters)

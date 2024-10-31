@@ -14,6 +14,7 @@ from celery_unstack import unstack
 from celery_embed import embed_listings, embed_listings_from_avm, remove_all_embed_listings_task_ids
 from celery_update_embeddings import update_embeddings, update_inactive_embeddings
 from celery_embed_index import embed_and_index_task
+from celery_delete_inactive import delete_inactive_listings_task
 
 # use this to establish a public endpt for image tagging service pipeline to upload image to
 # ./ngrok http 8000 
@@ -137,6 +138,7 @@ async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: in
   
   return JSONResponse(content={"message": "Embedding and indexing task started.", "task_id": task.id})
 
+''' Not needed
 @app.get("/update_inactive_vec_index")
 async def update_inactive_vec_index():
   """
@@ -145,6 +147,28 @@ async def update_inactive_vec_index():
   update_inactive_embeddings.apply_async(args=[str(img_cache_folder)], queue='update_embed_queue')
 
   return JSONResponse(content={"message": "Updating inactive vector index."})
+'''
+
+@app.get("/delete_inactive")
+async def delete_inactive(batch_size: int = Query(20), sleep_time: float = Query(0.5)):
+  """
+  Endpoint to trigger deletion of inactive listings from Weaviate.
+  This task will delete listings that have been marked as inactive, delisted, or sold
+  based on BigQuery data since the last run.
+  
+  Args:
+    batch_size: Number of listings to delete in each batch
+    sleep_time: Sleep time between batches in seconds
+  """
+  task = delete_inactive_listings_task.apply_async(
+    args=[batch_size, sleep_time],
+    queue='delete_inactive_queue'
+  )
+  
+  return JSONResponse(content={
+    "message": "Inactive listings deletion task started.",
+    "task_id": task.id
+  })
 
 
 @app.get("/task_status/{task_id}")

@@ -27,6 +27,8 @@ from ..data.preprocess import read_and_preprocess_image, read_and_process_image
 from realestate_spam.models.embedding import EmbeddingModel, InstructorEmbeddingModel
 from realestate_vision.common.utils import get_listingId_from_image_name
 
+NON_BLOCKING = False
+
 class ListingImageDataset(Dataset):
   def __init__(self, image_paths: List[Path], transform):
     self.image_paths = image_paths
@@ -215,7 +217,7 @@ class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
           batch_images = list(executor.map(read_and_preprocess_image, batch_paths, [self.preprocess]*len(batch_paths)))
 
           # Stack images into a single tensor
-          batch_tensor = torch.stack(batch_images, dim=0).to(self.device)
+          batch_tensor = torch.stack(batch_images, dim=0).to(self.device, non_blocking=NON_BLOCKING)
 
           with torch.no_grad():
             image_features = self.model.encode_image(batch_tensor, normalize=True).cpu().numpy()
@@ -258,7 +260,7 @@ class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
       image_names = [path.name for path in image_paths]
 
       for batch_tensors in tqdm(dataloader, desc='Processing images'):
-        batch_tensor = batch_tensors.to(self.device)
+        batch_tensor = batch_tensors.to(self.device, non_blocking=NON_BLOCKING)
 
         with torch.no_grad():
           image_features = self.model.encode_image(batch_tensor, normalize=True).cpu().numpy()
@@ -293,7 +295,7 @@ class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
 
     for i in tqdm(range(0, len(images), batch_size), desc='Processing images'):
       batch_images = images[i: i + batch_size]
-      image_tensors = [self.preprocess(image).unsqueeze(0).to(self.device) for image in batch_images]
+      image_tensors = [self.preprocess(image).unsqueeze(0).to(self.device, non_blocking=NON_BLOCKING) for image in batch_images]
       image_tensors = torch.cat(image_tensors, dim=0)  # Concatenate along the batch dimension
 
       with torch.no_grad():
@@ -318,7 +320,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
     if tokenize_sentences and self.nlp is None:
       self.nlp = spacy.load('en_core_web_sm')
 
-    jumpIds, text_embeddings, remark_chunk_ids = [], [], []
+    jumpIds, text_embeddings, remark_chunk_ids, tokenized_sentences = [], [], [], []
 
     if not use_dataloader:
 
@@ -330,7 +332,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
           batch_remarks = df.iloc[i: i + batch_size].remarks.values
 
           with torch.no_grad():
-            text_features = self.model.encode_text(self.tokenizer(batch_remarks).to(self.device), normalize=True).cpu().numpy()
+            text_features = self.model.encode_text(self.tokenizer(batch_remarks).to(self.device, non_blocking=NON_BLOCKING), normalize=True).cpu().numpy()
             jumpIds.extend(list(_jumpIds))
             text_embeddings.extend(list(text_features))
       else:
@@ -366,7 +368,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
               # If the batch size is reached, encode and reset the batch lists
               if len(sentence_batch) >= batch_size:
                   # Tokenize and encode the batch
-                  tokens = self.tokenizer(sentence_batch).to(self.device)
+                  tokens = self.tokenizer(sentence_batch).to(self.device, non_blocking=NON_BLOCKING)
                   with torch.no_grad():
                       embeddings = self.model.encode_text(tokens, normalize=True).cpu().numpy()
 
@@ -374,19 +376,21 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
                   text_embeddings.extend(embeddings)
                   jumpIds.extend(jumpId_batch)
                   remark_chunk_ids.extend(chunk_id_batch)
+                  tokenized_sentences.extend(sentence_batch)
 
                   # Clear the batch lists for the next batch
                   sentence_batch, jumpId_batch, chunk_id_batch = [], [], []
 
         # After processing all rows, handle any remaining sentences in the batch
         if sentence_batch:
-            tokens = self.tokenizer(sentence_batch).to(self.device)
+            tokens = self.tokenizer(sentence_batch).to(self.device, non_blocking=NON_BLOCKING)
             with torch.no_grad():
                 embeddings = self.model.encode_text(tokens, normalize=True).cpu().numpy()
 
             text_embeddings.extend(embeddings)
             jumpIds.extend(jumpId_batch)
             remark_chunk_ids.extend(chunk_id_batch)
+            tokenized_sentences.extend(sentence_batch)
 
     else:          
       dataset = ListingTextDatasetOpenClip(df, tokenize_sentences)
@@ -409,20 +413,20 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
                 chunk_id_batch.append(f"{batch_jumpIds[idx]}_{sent_idx}")
             
             if sentence_batch:  # Process sentences if any
-              text_inputs = self.tokenizer(sentence_batch).to(self.device)
+              text_inputs = self.tokenizer(sentence_batch).to(self.device, non_blocking=NON_BLOCKING)
               text_features = self.model.encode_text(text_inputs, normalize=True).cpu().numpy()
               text_embeddings.extend(list(text_features))
               jumpIds.extend(jumpId_batch)
               remark_chunk_ids.extend(chunk_id_batch)
           else:
-            text_inputs = self.tokenizer(batch_remarks).to(self.device)
+            text_inputs = self.tokenizer(batch_remarks).to(self.device, non_blocking=NON_BLOCKING)
             text_features = self.model.encode_text(text_inputs, normalize=True).cpu().numpy()
             jumpIds.extend(batch_jumpIds)
             text_embeddings.extend(list(text_features))
 
     if return_df:
       if tokenize_sentences:
-        return pd.DataFrame(data={'listing_id': jumpIds, 'remark_chunk_id': remark_chunk_ids, 'embedding': text_embeddings})
+        return pd.DataFrame(data={'listing_id': jumpIds, 'remark_chunk_id': remark_chunk_ids, 'sentence': tokenized_sentences, 'embedding': text_embeddings})
       else:
         return pd.DataFrame(data={'listing_id': jumpIds, 'embedding': text_embeddings})
     else:
@@ -437,7 +441,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
     for i in tqdm(range(0, len(texts), batch_size), desc='Processing texts'):
       batch_texts = texts[i: i + batch_size]
       with torch.no_grad():
-        text_features = self.model.encode_text(self.tokenizer(batch_texts).to(self.device), normalize=True).cpu().numpy()
+        text_features = self.model.encode_text(self.tokenizer(batch_texts).to(self.device, non_blocking=NON_BLOCKING), normalize=True).cpu().numpy()
 
       text_embeddings.extend(list(text_features))
     

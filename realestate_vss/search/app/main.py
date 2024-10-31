@@ -70,6 +70,7 @@ else:
 # Global variable to hold the search engine instance
 search_engine = None
 datastore = None
+image_embedder, text_embedder = None, None
 
 # non global variables
 if "LOCAL_PROJECT_HOME" in os.environ:
@@ -114,6 +115,7 @@ else:
 if use_weaviate:
   import weaviate
   from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
+  from realestate_vss.data.weaviate_datastore import AsyncWeaviateDataStore_v4 as AsyncWeaviateDataStore
 
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
@@ -246,11 +248,41 @@ async def load_listing_df():
 
   return listing_df
 
+def setup_weaviate():
+  global image_embedder, text_embedder, datastore
 
-# @app.on_event("startup")
+  if use_local_weaviate:
+    client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)
+  else:
+    client = weaviate.connect_to_wcs(
+      cluster_url=WCS_URL,
+      auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
+    )
+
+  datastore = WeaviateDataStore(client=client, 
+                                  image_embedder=image_embedder, 
+                                  text_embedder=text_embedder)
+  
+async def setup_async_weaviate():
+  global image_embedder, text_embedder, datastore
+
+  if use_local_weaviate:
+    async_client = weaviate.use_async_with_local(WEAVIATE_HOST, WEAVIATE_PORT)
+    await async_client.connect()
+  else:
+    async_client = weaviate.use_async_with_weaviate_cloud(
+      cluster_url=WCS_URL,
+      auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
+    )
+
+  datastore = AsyncWeaviateDataStore(async_client=async_client, 
+                                image_embedder=image_embedder, 
+                                text_embedder=text_embedder)
+
+
 async def startup_event():
-  global search_engine
-  global datastore
+  global image_embedder, text_embedder
+  global search_engine, datastore
 
   device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
   image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
@@ -267,16 +299,8 @@ async def startup_event():
     datastore = RedisDataStore(client=redis_client, image_embedder=image_embedder, text_embedder=text_embedder)
 
   elif use_weaviate:
-    if use_local_weaviate:
-      client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
-    else:
-      client = weaviate.connect_to_wcs(
-        cluster_url=WCS_URL,
-        auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
-      )
-    datastore = WeaviateDataStore(client=client, 
-                                  image_embedder=image_embedder, 
-                                  text_embedder=text_embedder)
+    # setup_weaviate()
+    await setup_async_weaviate()
   elif use_faiss:
     if faiss_image_index_path is None:
       # Async retrieval of embeddings dataframes
@@ -311,8 +335,10 @@ async def startup_event():
     raise Exception("No datastore or search engine (using faiss) specified")
 
 async def shutdown_event():
+  logger.info('Shutting and calling datastore.close ...')
+  global datastore
   if use_weaviate or use_redis:
-    datastore.close()
+    await datastore.close()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -342,25 +368,25 @@ class ListingData(BaseModel):
   lat: Optional[float] = None
   lng: Optional[float] = None
   streetName: Optional[str] = None
-  beds: str
-  bedsInt: int
-  baths: str
-  bathsInt: int
+  beds: Optional[str] = None
+  bedsInt: Optional[int] = None
+  baths: Optional[str] = None
+  bathsInt: Optional[int] = None
   sizeInterior: Optional[str] = None
   sizeInteriorUOM: Optional[str] = None
   lotSize: Optional[str] = None
   lotUOM: Optional[str] = None
-  propertyFeatures: List[str]
+  propertyFeatures: Optional[List[str]] = None
   propertyType: Optional[str] = None
-  transactionType: str
-  carriageTrade: bool
-  price: float
-  leasePrice: int
-  pool: bool
-  garage: bool
-  waterFront: bool
-  fireplace: bool
-  ac: bool
+  transactionType: Optional[str] = None
+  carriageTrade: Optional[bool] = None
+  price: Optional[float] = None
+  leasePrice: Optional[int] = None
+  pool: Optional[bool] = None
+  garage: Optional[bool] = None
+  waterFront: Optional[bool] = None
+  fireplace: Optional[bool] = None
+  ac: Optional[bool] = None
   remarks: Optional[str] = None
   listing_id: str
   listingId: Optional[str] = None
@@ -384,7 +410,7 @@ async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
   if use_faiss:
     listing_data = search_engine.get_listing(listingId)
   elif use_redis or use_weaviate:
-    listing_data = datastore.get_listing(listingId)
+    listing_data = await datastore.get_listing(listingId)
 
   if not listing_data:
       raise HTTPException(status_code=404, detail="Listing not found")
@@ -401,7 +427,7 @@ async def read_images(listingId: str) -> List[str]:
   if use_faiss:
     image_names = search_engine.get_imagenames(listingId)
   elif use_redis or use_weaviate:
-    image_names = datastore.get_imagenames(listingId)
+    image_names = await datastore.get_imagenames(listingId)
 
   image_names = [f"{listingId}/{image_name}" for image_name in image_names]
   return image_names
@@ -456,7 +482,7 @@ async def search_by_image(file: UploadFile = File(...)) -> List[ListingSearchRes
         # image_names, scores = search_engine.image_search(image, topk=50)
         listings = search_engine.image_search(image, topk=50, group_by_listingId=True)
       elif use_redis or use_weaviate:
-        listings = datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+        listings = await datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
     except Exception as e:
       return f'Error: {e}'
 
@@ -489,9 +515,12 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
     image_name = f'{image_name_wo_ext}_lg{ext}'
 
     if use_faiss:
-      photo_url = 'https:' + str(Path(search_engine.get_listing(listingId)['photo']).parent) + '/' + image_name
+      photo_url_prefix = search_engine.get_listing(listingId)['photo']
+      photo_url = 'https:' + str(Path(photo_url_prefix).parent) + '/' + image_name
     elif use_redis or use_weaviate:
-      photo_url = 'https:' + str(Path(datastore.get_listing(listingId)['photo']).parent) + '/' + image_name
+      _photo_url_prefix = await datastore.get_listing(listingId)
+      photo_url_prefix = _photo_url_prefix['photo']
+      photo_url = 'https:' + str(Path(photo_url_prefix).parent) + '/' + image_name
 
     async with httpx.AsyncClient() as client:
       response = await client.get(photo_url)
@@ -587,7 +616,7 @@ async def text_to_text_search(query: Dict[str, Any]) -> List[ListingSearchResult
     logger.info(f'before cleanup: {query}')
     query = cleanup_query(query)
     logger.info(f'after cleanup: {query}')
-    listings = datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+    listings = await datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   
   for listing in listings:
     listing['listing_id'] = listing['listingId']
@@ -615,7 +644,7 @@ async def text_to_image_search(query: Dict[str, Any]) -> List[ListingSearchResul
     logger.info(f'after cleanup: {query}')
 
     try:
-      listings = datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+      listings = await datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     except Exception as e:
       return f'search engine error: {e}'
 
@@ -657,7 +686,7 @@ async def image_2_text_search(file: UploadFile = File(...)) -> List[ListingSearc
       listings = search_engine._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
 
     elif use_redis or use_weaviate:
-      listings = datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+      listings = await datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
   except Exception as e:
     return f'Error: {e}'
 
@@ -752,7 +781,7 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     if use_faiss:
       listings = search_engine.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     elif use_redis or use_weaviate:
-      listings = datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+      listings = await datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   except Exception as e:
     return f'Error: {e}'
   
@@ -767,7 +796,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
 
   Parameters:
   file (UploadFile): The image file to search by image.
-  query (dict): The query to search by text.
+  query_body (dict): The query to search by text in format of {"phrase": "<search term>"}
 
   """
   
@@ -797,19 +826,27 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
     phrase = None
     query = {}
     
-  try:
-    if use_faiss:
-      listings = search_engine.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
-    elif use_redis or use_weaviate:
-      logger.info(f'phrase: {phrase}')
-      logger.info(f'query: {query}')
-      listings = datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
-  except Exception as e:
-    return f'Error: {e}'
+  # try:
+  if use_faiss:
+    listings = search_engine.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+  elif use_redis or use_weaviate:
+    logger.info(f'phrase: {phrase}')
+    logger.info(f'query: {query}')
+    listings = await datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+
+  # except Exception as e:
+  #   return f'Error: {e}'
   
   return listings
 
 
+@app.get("/health")
+async def health_check():
+  if use_weaviate:
+    is_connected = await datastore.ping()
+    if not is_connected:
+      raise HTTPException(status_code=503, detail="Weaviate connection lost")
+  return {"status": "healthy"}
 
 # for testing before UI is built
 @app.post("/search-by-image-html/", response_class=HTMLResponse)
