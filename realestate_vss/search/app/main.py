@@ -12,7 +12,7 @@ from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
 from realestate_vss.data.index import FaissIndex
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 import httpx
 import asyncio, io, json, os
@@ -71,6 +71,8 @@ else:
 search_engine = None
 datastore = None
 image_embedder, text_embedder = None, None
+use_process_pool = True
+pool = None
 
 # non global variables
 if "LOCAL_PROJECT_HOME" in os.environ:
@@ -276,17 +278,39 @@ async def setup_async_weaviate():
     )
 
   datastore = AsyncWeaviateDataStore(async_client=async_client, 
-                                image_embedder=image_embedder, 
-                                text_embedder=text_embedder)
+                                    image_embedder=image_embedder, 
+                                    text_embedder=text_embedder)
 
+def do_nothing():
+  pass
+
+def create_embedders():
+  global image_embedder, text_embedder
+  device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+
+  logger.info("Initiating image and text (clip based) embedders for process pool ...")
+  image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
+  text_embedder = OpenClipTextEmbeddingModel(embedding_model=image_embedder)
+
+  print(f'image_embedder in create_embedders: {image_embedder}')
+
+if use_process_pool:
+  pool = ProcessPoolExecutor(max_workers=1, initializer=create_embedders)
 
 async def startup_event():
   global image_embedder, text_embedder
   global search_engine, datastore
+  global pool
 
-  device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
-  image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
-  text_embedder = OpenClipTextEmbeddingModel(embedding_model=image_embedder)
+  if not use_process_pool:    
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+
+    logger.info("Initiating image and text (clip based) embedders...")
+    image_embedder = OpenClipImageEmbeddingModel(model_name=model_name, pretrained=pretrained, device=device)
+    text_embedder = OpenClipTextEmbeddingModel(embedding_model=image_embedder)
+  else:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(pool, do_nothing)  # dummy to trigger call to create_embedders
 
   if use_redis:
     pool = redis.ConnectionPool(
@@ -405,6 +429,32 @@ class PartialListingData(BaseModel):
   jumpId: Optional[str] = None
   image_name: Optional[str] = None
 
+def embed_image_in_process_pool(image: Image.Image) -> np.ndarray:
+  global image_embedder
+  return image_embedder.embed_from_single_image(image)
+
+def embed_text_in_process_pool(phrase: str) -> np.ndarray:
+  global text_embedder
+  return text_embedder.embed_from_texts([phrase], 1)[0]
+
+
+async def embed_image(image: Image.Image) -> List[float]:
+  # global image_embedder
+  # print(f'image_embedder in embed_image: {image_embedder}')
+
+  loop = asyncio.get_event_loop()
+  img_tensor_np = await loop.run_in_executor(pool, embed_image_in_process_pool, image)
+
+  return img_tensor_np.flatten().tolist()
+
+
+async def embed_text(phrase: str) -> List[float]:
+  # global text_embedder
+  loop = asyncio.get_event_loop()
+  txt_tensor_np = await loop.run_in_executor(pool, embed_text_in_process_pool, phrase)
+  # return txt_tensor_np[0].flatten().tolist()
+  return txt_tensor_np.flatten().tolist()
+
 @app.get("/listing/{listingId}")
 async def get_listing(listingId: str) -> Union[ListingData, PartialListingData]:
   if use_faiss:
@@ -482,7 +532,11 @@ async def search_by_image(file: UploadFile = File(...)) -> List[ListingSearchRes
         # image_names, scores = search_engine.image_search(image, topk=50)
         listings = search_engine.image_search(image, topk=50, group_by_listingId=True)
       elif use_redis or use_weaviate:
-        listings = await datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+        if use_process_pool:
+          embedding = await embed_image(image)
+          listings = await datastore._search_image_2_image(embedding=embedding, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+        else:
+          listings = await datastore._search_image_2_image(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
     except Exception as e:
       return f'Error: {e}'
 
@@ -616,7 +670,12 @@ async def text_to_text_search(query: Dict[str, Any]) -> List[ListingSearchResult
     logger.info(f'before cleanup: {query}')
     query = cleanup_query(query)
     logger.info(f'after cleanup: {query}')
-    listings = await datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+
+    if use_process_pool:
+      embedding = await embed_text(phrase)
+      listings = await datastore._search_text_2_text(embedding=embedding, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+    else:
+      listings = await datastore._search_text_2_text(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   
   for listing in listings:
     listing['listing_id'] = listing['listingId']
@@ -644,7 +703,11 @@ async def text_to_image_search(query: Dict[str, Any]) -> List[ListingSearchResul
     logger.info(f'after cleanup: {query}')
 
     try:
-      listings = await datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+      if use_process_pool:
+        embedding = await embed_text(phrase)
+        listings = await datastore._search_text_2_image(embedding=embedding, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+      else:
+        listings = await datastore._search_text_2_image(phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     except Exception as e:
       return f'search engine error: {e}'
 
@@ -686,7 +749,11 @@ async def image_2_text_search(file: UploadFile = File(...)) -> List[ListingSearc
       listings = search_engine._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
 
     elif use_redis or use_weaviate:
-      listings = await datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+      if use_process_pool:
+        embedding = await embed_image(image)
+        listings = await datastore._search_image_2_text(embedding=embedding, topk=50, group_by_listingId=True, include_all_fields=True, **{})
+      else:
+        listings = await datastore._search_image_2_text(image=image, topk=50, group_by_listingId=True, include_all_fields=True, **{})
   except Exception as e:
     return f'Error: {e}'
 
@@ -781,7 +848,20 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     if use_faiss:
       listings = search_engine.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
     elif use_redis or use_weaviate:
-      listings = await datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+      if use_process_pool:
+        embeddings = await asyncio.gather(*[embed_image(image) for image in images])
+        image_embedding = np.mean(embeddings, axis=0).tolist()
+
+        text_embedding = await embed_text(phrase) if phrase is not None else None
+
+        listings = await datastore.multi_image_search(image_embedding=image_embedding, 
+                                                      text_embedding=text_embedding, 
+                                                      topk=50, 
+                                                      group_by_listingId=True, 
+                                                      include_all_fields=True, 
+                                                      **query)
+      else:
+        listings = await datastore.multi_image_search(images, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
   except Exception as e:
     return f'Error: {e}'
   
@@ -832,7 +912,18 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
   elif use_redis or use_weaviate:
     logger.info(f'phrase: {phrase}')
     logger.info(f'query: {query}')
-    listings = await datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
+
+    if use_process_pool:
+      image_embedding = await embed_image(image) if image is not None else None
+      text_embedding = await embed_text(phrase) if phrase is not None else None
+      listings = await datastore.search(image_embedding=image_embedding, 
+                                        text_embedding=text_embedding, 
+                                        topk=50, 
+                                        group_by_listingId=True, 
+                                        include_all_fields=True, 
+                                        **query)
+    else:
+      listings = await datastore.search(image=image, phrase=phrase, topk=50, group_by_listingId=True, include_all_fields=True, **query)
 
   # except Exception as e:
   #   return f'Error: {e}'
@@ -848,6 +939,7 @@ async def health_check():
       raise HTTPException(status_code=503, detail="Weaviate connection lost")
   return {"status": "healthy"}
 
+# ---------------------------------------------------------------------------------------------------------------
 # for testing before UI is built
 @app.post("/search-by-image-html/", response_class=HTMLResponse)
 async def search_by_image_html(file: UploadFile = File(...)) -> HTMLResponse:
