@@ -63,10 +63,14 @@ celery_logger.setLevel('INFO')
 LAST_RUN_FILE = 'celery_embed_index.last_run.log'
 RUN_LOG_FILE = 'celery_embed_index.run_log.csv'
 
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
-# Initialize models
-image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
-text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
+# device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+# # Initialize models
+# image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
+# text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
+
+device = None
+image_embedding_model = None
+text_embedding_model = None
 
 def get_last_run_time():
   try:
@@ -342,7 +346,15 @@ def embed_and_index_task(self,
                          delete_incoming=True
                          ):
 
-  global image_embedding_model, text_embedding_model
+  global device, image_embedding_model, text_embedding_model
+  if device is None:
+    device = torch.device('cuda') if torch.cuda.is_available() else \
+             torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+  if image_embedding_model is None:
+    image_embedding_model = OpenClipImageEmbeddingModel(model_name='ViT-L-14', pretrained='laion2b_s32b_b82k', device=device)
+    
+  if text_embedding_model is None:
+    text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
 
   datastore, es, image_embeddings_df, text_embeddings_df = None, None, None, None
   listing_folders = None
