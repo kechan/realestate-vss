@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, Dict
 import os, gc
 from datetime import datetime, timedelta
 
@@ -6,15 +6,6 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 from celery.exceptions import SoftTimeLimitExceeded
 from pathlib import Path
-
-import weaviate
-from weaviate.classes.init import AdditionalConfig, Timeout
-
-import torch
-from dotenv import load_dotenv, find_dotenv
-
-from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
-from realestate_analytics.data.bq import BigQueryDatastore
 
 celery = Celery('delete_inactive_app', broker='pyamqp://guest@localhost//')
 
@@ -38,6 +29,9 @@ celery.conf.update(
   worker_max_tasks_per_child=1,          # Restart worker after each task
   broker_pool_limit=None,                # Don't limit connection pool
 
+  # TODO: need some testing to see if this reduces enough memory and not sacrifice too much throughput 
+  # worker_prefetch_multiplier=1,     # Reduce message prefetching
+
   # Settings to handle clock drift
   enable_utc=True,                       # Use UTC timestamps
   timezone='UTC',                        # Set timezone to UTC
@@ -56,7 +50,7 @@ celery_logger.setLevel('INFO')
 LAST_RUN_FILE = 'celery_delete_inactive.last_run.log'
 DELETE_LOG_FILE = 'celery_delete_inactive.run_log.csv'
 
-def get_last_delete_time():
+def get_last_delete_time() -> Optional[datetime]:
   try:
     with open(LAST_RUN_FILE, 'r') as f:
       last_run_str = f.read().strip()
@@ -70,7 +64,7 @@ def set_last_delete_time(a_datetime: datetime):
   with open(LAST_RUN_FILE, 'w') as f:
     f.write(a_datetime.isoformat())  
 
-def log_delete_run(start_time: datetime, end_time: Optional[datetime], status: str, stats: dict):
+def log_delete_run(start_time: datetime, end_time: Optional[datetime], status: str, stats: Dict):
   import pandas as pd
   
   duration = (end_time - start_time).total_seconds()
@@ -103,6 +97,13 @@ def delete_inactive_listings_task(self, batch_size=20, sleep=0.5):
     batch_size: Number of listings to delete in each batch
     sleep_time: Sleep time between batches in seconds
   """
+  
+   # Lazy imports
+  import weaviate
+  from weaviate.classes.init import AdditionalConfig, Timeout
+  from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
+  from realestate_analytics.data.bq import BigQueryDatastore
+  from dotenv import load_dotenv, find_dotenv
 
   datastore, bq_datastore = None, None
   task_status = 'Failed'
@@ -193,6 +194,8 @@ def delete_inactive_listings_task(self, batch_size=20, sleep=0.5):
       datastore.close()
     if bq_datastore:
       bq_datastore.close()
+
+    gc.collect()
 
     task_end_time = datetime.now()
     log_delete_run(task_start_time, task_end_time, task_status, stats)

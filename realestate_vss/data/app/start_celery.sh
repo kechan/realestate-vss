@@ -47,7 +47,9 @@ celery -A celery_delete_inactive.celery worker \
   --hostname=delete_inactive_worker@%h \
   --max-tasks-per-child=1 \
   --time-limit=3600 \
-  --soft-time-limit=3300
+  --soft-time-limit=3300 \
+  --without-gossip \
+  --without-mingle
 
 # Verify workers are running
 echo "Verifying workers..."

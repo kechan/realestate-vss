@@ -597,15 +597,18 @@ def embed_and_index_task(self,
     # delete all processed listing folders
     
     # processed_listing_ids = incoming_image_listingIds.union(incoming_text_listingIds)
-    celery_logger.info(f'Deleting all processed {len(listing_folders)} listing folders')
-    for listing_folder in listing_folders:
-      # listing_folder_path = img_cache_folder / str(listing_id)
-      try:
-        shutil.rmtree(listing_folder)    
-        # shutil.move(listing_folder_path, img_cache_folder/'done')   # TODO: for dev temporarily
-      except Exception as e:
-        celery_logger.warning(f'Unable to remove {listing_folder}')
-    celery_logger.info(f'Deleted all processed {len(listing_folders)} listing folders')
+    if listing_folders is not None:
+      celery_logger.info(f'Deleting all processed {len(listing_folders)} listing folders')
+      for listing_folder in listing_folders:
+        # listing_folder_path = img_cache_folder / str(listing_id)
+        try:
+          shutil.rmtree(listing_folder)    
+          # shutil.move(listing_folder_path, img_cache_folder/'done')   # TODO: for dev temporarily
+        except Exception as e:
+          celery_logger.warning(f'Unable to remove {listing_folder}')
+      celery_logger.info(f'Deleted all processed {len(listing_folders)} listing folders')
+    else:
+      celery_logger.warning('No listing folders to delete because listing_folders is None (please investigate)')
 
     # Calculate total statistics
     stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]

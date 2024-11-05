@@ -435,7 +435,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
       else:
         return jumpIds, text_embeddings
 
-  def embed_from_texts(self, texts: List[str], batch_size=128):
+  def embed_from_texts(self, texts: List[str], batch_size=128) -> List[np.ndarray]:
 
     text_embeddings = []
     for i in tqdm(range(0, len(texts), batch_size), desc='Processing texts'):

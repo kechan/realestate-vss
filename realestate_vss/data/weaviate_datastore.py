@@ -13,7 +13,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from realestate_core.common.utils import join_df
 from realestate_vision.common.utils import get_listingId_from_image_name
-from ..data.index import FaissIndex
 
 from weaviate.exceptions import ObjectAlreadyExistsException, UnexpectedStatusCodeException
 from weaviate.client import WeaviateAsyncClient
@@ -1168,7 +1167,12 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
 
 
-  def import_from_faiss_index(self, faiss_index: FaissIndex, listing_df: pd.DataFrame, embedding_type: str = 'I', offset: int = None, length: int = None):
+  def import_from_faiss_index(self, 
+                              faiss_index: Any,    # a FaissIndex object
+                              listing_df: pd.DataFrame, 
+                              embedding_type: str = 'I', 
+                              offset: int = None, 
+                              length: int = None):
     """
     Import data from a FaissIndex object into Weaviate. The listing_df must be 
     there to provide the necessary metadata for each listing.
@@ -1708,8 +1712,10 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
 
   @retry(**RETRY_SETTINGS)
   async def multi_image_search(self, 
-                                images: List[Image.Image],
+                                images: List[Image.Image] = None,
+                                image_embedding: List[float] = None,
                                 phrase: str = None,
+                                text_embedding: List[float] = None,
                                 topk: int = 5,
                                 group_by_listingId: bool = False,
                                 include_all_fields: bool = False,
@@ -1729,17 +1735,18 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
     Returns:
         Union[List[Dict], Tuple[List[str], List[float]]]: Search results.
     """
-    self.logger.info(f'Number of images: {len(images)}')
-    all_image_embeddings = []
-    for image in images:
-      image_embedding = self.image_embedder.embed_from_single_image(image)
-      all_image_embeddings.append(image_embedding)
-    mean_vector = np.mean(all_image_embeddings, axis=0)
+    # self.logger.info(f'Number of images: {len(images)}')
+    if image_embedding is None and images is not None:
+      all_image_embeddings = []
+      for image in images:
+        image_embedding = self.image_embedder.embed_from_single_image(image)
+        all_image_embeddings.append(image_embedding)
+      mean_vector = np.mean(all_image_embeddings, axis=0)
 
-    image_embedding = mean_vector.flatten().tolist()
+      image_embedding = mean_vector.flatten().tolist()
 
-    text_embedding = None
-    if phrase:
+    
+    if text_embedding is None and phrase is not None:
       text_embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
 
     return await self.search(image_embedding=image_embedding, 

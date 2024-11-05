@@ -357,6 +357,28 @@ async def startup_event():
       
   else:
     raise Exception("No datastore or search engine (using faiss) specified")
+  
+  logger.info('Warming up')
+  warmup_text_embedding = None
+  if use_process_pool:
+    dummy_image = Image.new('RGB', (224, 224))
+    await embed_image(dummy_image)
+    warmup_text_embedding = await embed_text('dummy warmup text')
+
+  if use_weaviate:
+    try:
+      
+      await datastore._search_text_2_text(
+        phrase='dummy warmup text' if not use_process_pool else None,
+        embedding=warmup_text_embedding, 
+        topk=1, 
+        group_by_listingId=True, 
+        include_all_fields=True, 
+        **{}
+      )
+    except Exception as e:
+      logger.warning(f'Warmup search failed: {e}')
+  logger.info('Warmup done')
 
 async def shutdown_event():
   logger.info('Shutting and calling datastore.close ...')
