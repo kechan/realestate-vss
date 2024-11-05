@@ -11,8 +11,8 @@ from dotenv import load_dotenv, find_dotenv
 
 from celery.result import AsyncResult
 from celery_unstack import unstack
-from celery_embed import embed_listings, embed_listings_from_avm, remove_all_embed_listings_task_ids
-from celery_update_embeddings import update_embeddings, update_inactive_embeddings
+# from celery_embed import embed_listings, embed_listings_from_avm, remove_all_embed_listings_task_ids
+# from celery_update_embeddings import update_embeddings, update_inactive_embeddings
 from celery_embed_index import embed_and_index_task
 from celery_delete_inactive import delete_inactive_listings_task
 
@@ -79,6 +79,7 @@ async def submit(
   # Respond with status of the upload
   return JSONResponse(content={"message": f"file {file.filename} saved with metadata."})
 
+''' Not needed for now
 @app.post("/submit_listing_jsons/")
 async def submit_listing_jsons(body: bytes = Body(...), start_date: Optional[str] = None, end_date: Optional[str] = None):
   """
@@ -98,6 +99,7 @@ async def submit_listing_jsons(body: bytes = Body(...), start_date: Optional[str
     return {"message": "Data processed successfully", "received_records": len(json_data)}
   except Exception as e:
     raise HTTPException(status_code=400, detail=f"Error processing data: {str(e)}")
+'''
 
 ''' Not needed for now
 @app.get("/remove_all_embed_listings_task_id")
