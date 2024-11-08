@@ -343,7 +343,7 @@ def embed_and_index_task(self,
                         image_batch_size: int, 
                         text_batch_size: int, 
                         num_workers: int, 
-                        delete_incoming=True
+                        delete_incoming=False
                         ):
 
   global device, image_embedding_model, text_embedding_model

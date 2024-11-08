@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, Body, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
@@ -16,6 +16,8 @@ from celery_unstack import unstack
 from celery_embed_index import embed_and_index_task
 from celery_delete_inactive import delete_inactive_listings_task
 
+import logging
+
 # use this to establish a public endpt for image tagging service pipeline to upload image to
 # ./ngrok http 8000 
 
@@ -32,6 +34,105 @@ listing_fields = ['jumpId', 'city', 'provState', 'postalCode', 'lat', 'lng', 'st
                   'leasePrice', 'pool', 'garage', 'waterFront', 'fireplace', 'ac',
                   'remarks', 'photo', 'listingDate', 'lastUpdate', 'lastPhotoUpdate']
 
+
+class UnsyncFileManager:
+  def __init__(self, 
+    unsync_folder: Path,
+    es_host: str,
+    es_port: int,
+    es_index: str,
+    expiration_days: int = 30
+  ):
+    self.logger = logging.getLogger(__name__)
+    self.unsync_folder = unsync_folder
+    self.expiration_days = expiration_days
+
+    from realestate_vss.data.es_client import ESClient
+    self.es_client = ESClient(
+      host=es_host,
+      port=es_port,
+      index_name=es_index,
+      fields=['jumpId']
+    )
+
+  def get_expired_files(self) -> List[Tuple[Path, datetime]]:
+    """Find files older than expiration_days."""
+    expired_files = []
+    for file in self.unsync_folder.glob("unsync_image_embeddings_df.*"):
+      try:
+        # Extract timestamp from filename
+        timestamp_str = file.name.split('.')[-1]
+        timestamp = datetime.strptime(timestamp_str, "%Y%m%d%H%M")
+        
+        # Check if file is expired
+        age_days = (datetime.now() - timestamp).days
+        if age_days > self.expiration_days:
+          expired_files.append((file, timestamp))
+      except Exception as e:
+        self.logger.warning(f"Error processing file {file}: {e}")
+    
+    return expired_files
+
+  def cleanup_expired_files(self, dry_run: bool = True) -> List[Dict]:
+    """
+    Wrapper method that ensures ES client cleanup.
+    """
+    try:
+      return self._do_cleanup(dry_run)
+    finally:
+      if hasattr(self, 'es_client'):
+        self.es_client.close()
+
+  def _do_cleanup(self, dry_run: bool = True) -> List[Dict]:
+    """
+    Main cleanup implementation
+    
+    Clean up expired unsync files if none of their listings exist in ES.
+    """
+    expired_files = self.get_expired_files()
+    results = []
+    
+    for file_path, timestamp in expired_files:
+      try:
+        # Read the file and get unique listings
+        df = pd.read_feather(file_path)
+        unique_listings = df['listing_id'].unique().tolist()
+        
+        # Check if any listings exist in ES
+        existing_listings = self.es_client.get_active_listings(unique_listings)
+        
+        if not existing_listings:  # No listings exist in ES
+          size_mb = file_path.stat().st_size / (1024 * 1024)
+          age_days = (datetime.now() - timestamp).days
+          
+          if not dry_run:
+            file_path.unlink()
+          
+          results.append({
+            'filename': file_path.name,
+            'age_days': age_days,
+            'size_mb': round(size_mb, 2),
+            'total_listings': len(unique_listings),
+            'listings': unique_listings,
+            'action': 'deleted' if not dry_run else 'would_delete',
+            'reason': f"Age: {age_days} days, no listings found in ES"
+          })
+        else:
+          results.append({
+            'filename': file_path.name,
+            'action': 'preserved',
+            'reason': f"Found {len(existing_listings)} active listings in ES"
+          })
+          
+      except Exception as e:
+        self.logger.error(f"Error processing file {file_path}: {e}")
+        results.append({
+          'filename': file_path.name,
+          'action': 'error',
+          'error': str(e)
+        })
+    
+    return results
 
 app = FastAPI()
 
@@ -130,7 +231,7 @@ async def update_vec_index():
 '''
 
 @app.get("/embed_and_index")
-async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4), delete_incoming: bool = Query(True)):
+async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4), delete_incoming: bool = Query(False)):
   task = embed_and_index_task.apply_async(args=[str(img_cache_folder), 
                                                 listing_fields, 
                                                 image_batch_size, 
@@ -183,6 +284,61 @@ async def get_task_status(task_id: str):
   }
   return JSONResponse(content=response)
 
+
+# Add the new endpoint
+@app.get("/delete_old_unsync")
+async def delete_old_unsync(dry_run: bool = Query(True), expiration_days: int = Query(30)):
+  """
+  Endpoint to cleanup old unsync files.
+  
+  Args:
+    dry_run: If True, only simulate deletion
+    expiration_days: Number of days after which files are considered expired
+  
+  Returns:
+    JSON response with cleanup results
+  """
+  try:
+    # Get ES configuration from environment
+    es_host = os.getenv("ES_HOST")
+    es_port = int(os.getenv("ES_PORT"))
+    es_index = os.getenv("ES_LISTING_INDEX_NAME")
+    
+    if not all([es_host, es_port, es_index]):
+      raise HTTPException(
+        status_code=500,
+        detail="Missing required ES configuration in environment"
+      )
+    
+    # Initialize manager and run cleanup
+    unsync_folder = img_cache_folder / 'unsync'
+    manager = UnsyncFileManager(
+      unsync_folder=unsync_folder,
+      es_host=es_host,
+      es_port=es_port,
+      es_index=es_index,
+      expiration_days=expiration_days
+    )
+    
+    results = manager.cleanup_expired_files(dry_run=dry_run)
+    
+    # Summarize results
+    summary = {
+      'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+      'dry_run': dry_run,
+      'expiration_days': expiration_days,
+      'total_files_processed': len(results),
+      'files_to_delete': len([r for r in results if r['action'] in ('deleted', 'would_delete')]),
+      'files_preserved': len([r for r in results if r['action'] == 'preserved']),
+      'errors': len([r for r in results if r['action'] == 'error']),
+      'details': results
+    }
+    
+    return JSONResponse(content=summary)
+    
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=str(e))
+  
 # Run the server and reload on changes
 # if __name__ == "__main__":
 #     uvicorn.run(app, host="0.0.0.0", port=8000)
