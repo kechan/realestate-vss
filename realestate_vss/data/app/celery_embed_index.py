@@ -338,13 +338,13 @@ def process_unsync_image_embeddings(img_cache_folder: Path,
 
 @celery.task(bind=True, max_retries=3)
 def embed_and_index_task(self, 
-                         img_cache_folder: str, 
-                         es_fields: List[str], 
-                         image_batch_size: int, 
-                         text_batch_size: int, 
-                         num_workers: int, 
-                         delete_incoming=True
-                         ):
+                        img_cache_folder: str, 
+                        es_fields: List[str], 
+                        image_batch_size: int, 
+                        text_batch_size: int, 
+                        num_workers: int, 
+                        delete_incoming=True
+                        ):
 
   global device, image_embedding_model, text_embedding_model
   if device is None:
@@ -628,14 +628,22 @@ def embed_and_index_task(self,
 
     # TODO: consider commeting these out when deployed
     # Backup
-    backup_folder = img_cache_folder / 'backup'
-    timestamp = datetime.now().strftime("%Y%m%d%H%M")
-    if image_embeddings_df is not None and not image_embeddings_df.empty:
-      image_embeddings_df.to_feather(backup_folder/f'image_embeddings_df.{timestamp}')
-    if text_embeddings_df is not None and not text_embeddings_df.empty:
-      text_embeddings_df.to_feather(backup_folder/f'text_embeddings_df.{timestamp}')
-    if listing_df is not None and not listing_df.empty:
-      listing_df.to_feather(backup_folder/f'listing_df.{timestamp}')
+    backup(
+      backup_folder=img_cache_folder/'backup',
+      image_embeddings_df=image_embeddings_df,
+      text_embeddings_df=text_embeddings_df,
+      listing_df=listing_df,
+      compression='zstd',
+      compression_level=3
+    )
+
+    # timestamp = datetime.now().strftime("%Y%m%d%H%M")
+    # if image_embeddings_df is not None and not image_embeddings_df.empty:
+    #   image_embeddings_df.to_feather(backup_folder/f'image_embeddings_df.{timestamp}')
+    # if text_embeddings_df is not None and not text_embeddings_df.empty:
+    #   text_embeddings_df.to_feather(backup_folder/f'text_embeddings_df.{timestamp}')
+    # if listing_df is not None and not listing_df.empty:
+    #   listing_df.to_feather(backup_folder/f'listing_df.{timestamp}')
 
     task_status = "Completed"
 
@@ -725,3 +733,63 @@ def get_listing_data(es: ESClient, listing_ids: List[str], es_fields: List[str])
   listing_df.leasePrice = pd.to_numeric(listing_df.leasePrice, errors='coerce')
 
   return listing_df
+
+def backup(backup_folder: Path,
+          image_embeddings_df: Optional[pd.DataFrame] = None,
+          text_embeddings_df: Optional[pd.DataFrame] = None, 
+          listing_df: Optional[pd.DataFrame] = None,
+          compression: str = 'zstd',
+          compression_level: int = 9) -> None:
+  """
+  Backs up dataframes with compression support.
+  
+  Args:
+    backup_folder: Path to the backup directory
+    image_embeddings_df: DataFrame containing image embeddings
+    text_embeddings_df: DataFrame containing text embeddings 
+    listing_df: DataFrame containing listing data
+    compression: Compression algorithm to use ('zstd' or 'lz4')
+    compression_level: Compression level (higher = better compression but slower)
+  """
+  if compression not in ['zstd', 'lz4']:
+    raise ValueError("Compression must be either 'zstd' or 'lz4'")
+  
+  if not (0 <= compression_level <= 9):
+    raise ValueError("Compression level must be between 0 and 9")  
+
+  try:
+    timestamp = datetime.now().strftime("%Y%m%d%H%M")
+    
+    # Create backup folder if it doesn't exist
+    backup_folder.mkdir(exist_ok=True, parents=True)
+    
+    # Helper function to safely save DataFrame with compression
+    def save_df_compressed(df: pd.DataFrame, filename: str) -> None:
+      try:
+        df.to_feather(
+          backup_folder / filename,
+          compression=compression,
+          compression_level=compression_level
+        )
+      except Exception as e:
+        celery_logger.error(f"Failed to save {filename}: {str(e)}")
+        # Fallback to uncompressed if compression fails
+        try:
+          df.to_feather(backup_folder / f"uncompressed_{filename}")
+          celery_logger.info(f"Saved uncompressed fallback: {filename}")
+        except Exception as e2:
+          celery_logger.error(f"Failed to save uncompressed fallback {filename}: {str(e2)}")
+
+    # Backup each DataFrame if it exists and is not empty
+    if image_embeddings_df is not None and not image_embeddings_df.empty:
+      save_df_compressed(image_embeddings_df, f'image_embeddings_df.{timestamp}')
+    
+    if text_embeddings_df is not None and not text_embeddings_df.empty:
+      save_df_compressed(text_embeddings_df, f'text_embeddings_df.{timestamp}')
+    
+    if listing_df is not None and not listing_df.empty:
+      save_df_compressed(listing_df, f'listing_df.{timestamp}')
+
+  except Exception as e:
+    celery_logger.error(f"Backup operation failed: {str(e)}")
+
