@@ -474,7 +474,10 @@ def embed_and_index_task(self,
     WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT")) if os.getenv("WEAVIATE_PORT") is not None else None
     if WEAVIATE_HOST is not None and WEAVIATE_PORT is not None:
       celery_logger.info(f'weaviate_host: {WEAVIATE_HOST}, weaviate_port: {WEAVIATE_PORT}')
-      client = weaviate.connect_to_local(WEAVIATE_HOST, WEAVIATE_PORT)  # TODO: change this before deployment
+      client = weaviate.connect_to_local(host=WEAVIATE_HOST, 
+                                         port=WEAVIATE_PORT,
+                                         additional_config=AdditionalConfig(timeout=Timeout(init=30, query=60, insert=120)),
+                                         )  # TODO: change this before deployment
     else:
       WCS_URL = os.getenv("WCS_URL")
       WCS_API_KEY = os.getenv("WCS_API_KEY")
