@@ -3,6 +3,7 @@ import weaviate, asyncio, uuid, math, time, gc
 from PIL import Image
 from datetime import datetime
 from dateutil import parser
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,7 @@ from tqdm.auto import tqdm
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, wait_fixed
 
-from realestate_core.common.utils import join_df
+from realestate_core.common.utils import join_df, save_to_pickle, load_from_pickle
 from realestate_vision.common.utils import get_listingId_from_image_name
 
 from weaviate.exceptions import ObjectAlreadyExistsException, UnexpectedStatusCodeException
@@ -238,7 +239,7 @@ class WeaviateDataStore:
     listings = sorted(listings, key=lambda x: x['agg_score'], reverse=True)
 
     for listing in listings:
-      listing['remarks'] = all_json_fields[listing['listingId']]['remarks']
+      listing['remarks'] = all_json_fields[listing['listingId']].get('remarks', '')
       if include_all_fields:
         listing.update(all_json_fields[listing['listingId']])
 
@@ -288,7 +289,7 @@ class WeaviateDataStore:
 
       for listing in listings:
         listing['image_names'] = []    # no image names for text search, but keep response more consistent
-        listing['remarks'] = all_json_fields[listing['listingId']]['remarks']
+        listing['remarks'] = all_json_fields[listing['listingId']].get('remarks', '')
         if include_all_fields:
           listing.update(all_json_fields[listing['listingId']])
 
@@ -320,6 +321,10 @@ class WeaviateDataStore:
     for result in text_results:
       listingId = result['listingId']
       if listingId in listings_dict:
+        # Preserve remarks from text result if it exists
+        if 'remarks' in result and result['remarks']:
+          listings_dict[listingId]['remarks'] = result['remarks']
+          
         # Add score to agg_score
         listings_dict[listingId]['agg_score'] += result['agg_score']
       else:
@@ -631,7 +636,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
     return count
 
-  def get(self, listing_id: Optional[str] = None, embedding_type: str = 'I', include_vector=False):
+  def get(self, listing_id: Optional[str] = None, embedding_type: str = 'T', include_vector=False):
     """
     Retrieve items from Weaviate related to listing_id and embedding_type.
     If listing_id is None, retrieve all items.
@@ -750,40 +755,69 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       return None
 
   @retry(**RETRY_SETTINGS)
-  def raw_export_all(self, embedding_type: str) -> List[Dict]:
+  def raw_export_all(self, embedding_type: str, output_path: Path, chunk_size=100000) -> int:
     """
     Export/dump all raw data from Weaviate without post-processing.
     
+    Export all raw data from Weaviate in chunks to separate pickle files.
+  
     Args:
       embedding_type: Required string indicating collection type ('I' for images, 'T' for text)
+      output_path: Base path for pickle files (without extension)
+      chunk_size: Number of records per pickle file
+    
+    Returns:
+      int: Total number of records exported
     """
     if embedding_type not in ['I', 'T']:
       raise ValueError("embedding_type must be either 'I' for images or 'T' for text")
 
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     collection = self.client.collections.get(collection_name)
+
+    total_count = collection.aggregate.over_all().total_count
+    current_chunk = []
+    chunk_num = 0
+    total_processed = 0
     
-    exported_data = []
-    for item in tqdm(collection.iterator(include_vector=True)):
+    for item in tqdm(collection.iterator(include_vector=True), total=total_count, desc=f"Exporting {collection_name}"):
       raw_data = {
         **item.properties,
         'vector': item.vector['default']
       }
-      exported_data.append(raw_data)
+      current_chunk.append(raw_data)
+      total_processed += 1
 
-    return exported_data
+      # when chunk is full, save it and start a new one
+      if len(current_chunk) >= chunk_size:
+        chunk_file = Path(f"{output_path}_{chunk_num}.pkl")
+        save_to_pickle(current_chunk, chunk_file, compressed=True)
+        current_chunk = []
+        chunk_num += 1
+        gc.collect()
+
+    # save the last chunk
+    if current_chunk:
+      chunk_file = Path(f"{output_path}_{chunk_num}.pkl")
+      save_to_pickle(current_chunk, chunk_file, compressed=True)
+
+    return total_processed
   
   @retry(**RETRY_SETTINGS)
-  def raw_import_all(self, listings: Iterable[Dict], embedding_type: str, batch_size: int = 1000, sleep_time: float = 1):
+  def raw_import_all(self, input_path: Path, embedding_type: str, batch_size=1000, sleep_time=0.5) -> int:
     """
-    Import raw listing data previously exported using raw_export methods.
+    Import data previously exported using raw_export_all back into Weaviate.
+    Handles multiple pickle files in format input_path_N.pkl.
     Preserves data exactly as exported while assigning proper UUIDs based on listing data.
     
     Args:
-      raw_listings: Raw listing data as exported by raw_export methods
+      input_path: Base path of the pickle files (without extension and chunk number)
       embedding_type: Required string indicating collection type ('I' for images, 'T' for text)
       batch_size: Number of items to process in each batch
       sleep_time: Sleep time between batches to prevent overload
+    
+    Returns:
+      int: Total number of records imported
     """
     if embedding_type not in ['I', 'T']:
       raise ValueError("embedding_type must be either 'I' for images or 'T' for text")
@@ -795,23 +829,55 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       for i in range(0, len(iterable), size):
         yield iterable[i:i + size]
 
-    try:
-      for batch_listings in chunks(list(listings), batch_size):
-        with collection.batch.dynamic() as batch_writer:
-          for listing_json in tqdm(batch_listings):
+    total_imported = 0
+    chunk_num = 0
+
+    while True:
+      chunk_file = Path(f"{input_path}_{chunk_num}.pkl")
+      if not chunk_file.exists():
+        break
+
+      try:
+        listings = load_from_pickle(chunk_file, compressed=True)
+
+        for batch_listings in chunks(list(listings), batch_size):
+          with collection.batch.dynamic() as batch_writer:
+            for listing_json in tqdm(batch_listings):
+              key = self._create_key(listing_json, embedding_type)
+              vector = listing_json.pop('vector')
+              batch_writer.add_object(
+                properties=listing_json,
+                vector=vector,
+                uuid=key
+              )
+          time.sleep(sleep_time)
+        
+        total_imported += len(listings)
+        chunk_num += 1
+        gc.collect()
+      except Exception as e:
+        self.logger.error(f"Error importing chunk {chunk_num}: {e}")
+        raise
+
+    # try:
+    #   for batch_listings in chunks(list(listings), batch_size):
+    #     with collection.batch.dynamic() as batch_writer:
+    #       for listing_json in tqdm(batch_listings):
             
-            key = self._create_key(listing_json, embedding_type)
-            vector = listing_json.pop('vector')
+    #         key = self._create_key(listing_json, embedding_type)
+    #         vector = listing_json.pop('vector')
             
-            batch_writer.add_object(
-              properties=listing_json,
-              vector=vector,
-              uuid=key
-            )
-        time.sleep(sleep_time)
-    except Exception as e:
-      self.logger.error(f"Error batch inserting objects: {e}")
-      raise
+    #         batch_writer.add_object(
+    #           properties=listing_json,
+    #           vector=vector,
+    #           uuid=key
+    #         )
+    #     time.sleep(sleep_time)
+    # except Exception as e:
+    #   self.logger.error(f"Error batch inserting objects: {e}")
+    #   raise
+
+    return total_imported
 
 
   @retry(**RETRY_SETTINGS)
@@ -903,7 +969,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = json_fields
       else:
         # only incl. remarks
-        all_json_fields[listing_id] = {'remarks': json_fields['remarks']}
+        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
 
     if group_by_listingId:
       return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
@@ -942,7 +1008,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = json_fields
       else:
         # only incl. remarks
-        all_json_fields[listing_id] = {'remarks': json_fields['remarks']}
+        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
 
     if group_by_listingId:
       return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
@@ -981,7 +1047,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = json_fields
       else:
         # only incl. remarks
-        all_json_fields[listing_id] = {'remarks': json_fields['remarks']}
+        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
     
     if group_by_listingId:
       return self._image_search_groupby_listing(top_image_names, top_scores, include_all_fields, all_json_fields)
@@ -1020,7 +1086,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = json_fields
       else:
         # only incl. remarks
-        all_json_fields[listing_id] = {'remarks': json_fields['remarks']}
+        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
 
     if group_by_listingId:
       return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
@@ -1221,9 +1287,9 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   # these are methods that conform to class ListingSearchEngine interface
   # which is also expected by main.py the fastAPI app
   def get_listing(self, listing_id: str) -> Dict[str, Any]:
-    listing_docs = self.get(listing_id, embedding_type='I')
+    listing_docs = self.get(listing_id, embedding_type='T')
     if len(listing_docs) == 0: 
-      listing_docs = self.get(listing_id, embedding_type='T')
+      listing_docs = self.get(listing_id, embedding_type='I')
       if len(listing_docs) == 0:
         return {}
       
@@ -1272,7 +1338,7 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
   async def close(self):
     await self.client.close()
   
-  async def get(self, listing_id: Optional[str] = None, embedding_type: str = 'I', include_vector=False):
+  async def get(self, listing_id: Optional[str] = None, embedding_type: str = 'T', include_vector=False):
     """
     Retrieve items from Weaviate related to listing_id and embedding_type.
     If listing_id is None, retrieve all items.
@@ -1319,9 +1385,9 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
     Returns:
         Dict[str, Any]: Listing document with 'jumpId' added, or empty dict if not found
     """
-    listing_docs = await self.get(listing_id, embedding_type='I')
+    listing_docs = await self.get(listing_id, embedding_type='T')
     if len(listing_docs) == 0:
-      listing_docs = await self.get(listing_id, embedding_type='T')
+      listing_docs = await self.get(listing_id, embedding_type='I')
       if len(listing_docs) == 0:
         return {}
 
@@ -1402,7 +1468,7 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = json_fields
       else:
         # only incl. remarks
-        all_json_fields[listing_id] = {'remarks': json_fields['remarks']}
+        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
 
     if group_by_listingId:
       if embedding_type == 'I':

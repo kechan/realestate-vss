@@ -127,12 +127,26 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
                  This can also be thought of as the primary key to auxilliary information.  
   listing_df (pd.DataFrame): DataFrame containing the detail listing data.    
 
+  Note: For image embeddings, remarks are excluded to save space.
+
   Returns the number of documents inserted.
   """
   items_to_process = list(embeddings_df.q("listing_id.isin(@listingIds)")[aux_key].values)
   processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
-  _df = join_df(processed_embeddings_df, listing_df, left_on='listing_id', right_on='jumpId', how='left').drop(columns=['jumpId'])
+
+  _df = join_df(processed_embeddings_df, 
+                listing_df, 
+                left_on='listing_id', 
+                right_on='jumpId', 
+                how='left') #.drop(columns=['jumpId'])
+  
+  # for image embeddings, don't populate remarks (space optimization for weaviate)
+  if embedding_type == 'I':
+    _df.drop(columns=['remarks'], inplace=True)
+
+  _df.drop(columns=['jumpId'], inplace=True)
   listing_jsons = _df.to_dict(orient='records')
+
   datastore.batch_insert(listing_jsons, 
                          embedding_type=embedding_type, 
                          batch_size=1000, 
@@ -336,6 +350,59 @@ def process_unsync_image_embeddings(img_cache_folder: Path,
   return aggregate_stats
 
 
+def load_image_embeddings(img_cache_folder: Path, logger) -> Tuple[pd.DataFrame, Path]:
+  """
+  Load image embeddings from either timestamped or non-timestamped file.
+  For timestamped files, uses the oldest one.
+  Returns (dataframe, file_path) tuple. Both can be None if no valid file found.
+  """
+  # Try non-timestamped file first
+  image_embeddings_file = img_cache_folder / 'image_embeddings_df'
+  if image_embeddings_file.exists():
+    logger.info(f"Loading image embeddings from {image_embeddings_file}")
+    return pd.read_feather(image_embeddings_file), image_embeddings_file
+    
+  # Try timestamped file
+  timestamped_files = list(img_cache_folder.glob('image_embeddings_df.*'))
+  if timestamped_files:
+    # Take the oldest
+    oldest_file = min(timestamped_files, key=lambda x: x.stat().st_mtime)
+    logger.info(f"Loading image embeddings from {oldest_file}")
+    return pd.read_feather(oldest_file), oldest_file
+    
+  return None, None
+
+
+def load_text_embeddings(img_cache_folder: Path, logger) -> Tuple[pd.DataFrame, pd.DataFrame, Path, Path]:
+  """
+  Load text embeddings and listing df from either timestamped or non-timestamped files.
+  For timestamped files, uses the oldest ones.
+  Returns (text_df, listing_df, text_file_path, listing_file_path) tuple. Any can be None.
+  """
+  # Try non-timestamped files first
+  text_embeddings_file = img_cache_folder / 'text_embeddings_df'
+  listing_df_file = img_cache_folder / 'listing_df'
+  
+  if text_embeddings_file.exists() and listing_df_file.exists():
+    logger.info(f"Loading text embeddings from {text_embeddings_file}")
+    logger.info(f"Loading listing data from {listing_df_file}")
+    return pd.read_feather(text_embeddings_file), pd.read_feather(listing_df_file), text_embeddings_file, listing_df_file
+    
+  # Try timestamped files
+  text_timestamped = list(img_cache_folder.glob('text_embeddings_df.*'))
+  listing_timestamped = list(img_cache_folder.glob('listing_df.*'))
+  
+  if text_timestamped and listing_timestamped:
+    # Take the oldest ones
+    oldest_text = min(text_timestamped, key=lambda x: x.stat().st_mtime)
+    oldest_listing = min(listing_timestamped, key=lambda x: x.stat().st_mtime)
+    logger.info(f"Loading text embeddings from {oldest_text}")
+    logger.info(f"Loading listing data from {oldest_listing}")
+    return pd.read_feather(oldest_text), pd.read_feather(oldest_listing), oldest_text, oldest_listing
+    
+  return None, None, None, None
+
+
 @celery.task(bind=True, max_retries=3)
 def embed_and_index_task(self, 
                         img_cache_folder: str, 
@@ -356,13 +423,17 @@ def embed_and_index_task(self,
   if text_embedding_model is None:
     text_embedding_model = OpenClipTextEmbeddingModel(embedding_model=image_embedding_model, device=device)
 
-  datastore, es, image_embeddings_df, text_embeddings_df = None, None, None, None
-  listing_folders = None
+  datastore, es = None, None
+  image_embeddings_df, text_embeddings_df, listing_folders = None, None, None
   task_status = "Failed"
   error_message = None
   img_cache_folder = Path(img_cache_folder)
   unsync_folder = img_cache_folder / 'unsync'
   unsync_folder.mkdir(exist_ok=True)
+
+  image_embeddings_file_used = None
+  text_embeddings_file_used = None
+  listing_df_file_used = None
 
   # Statistics
   stats = {
@@ -436,19 +507,18 @@ def embed_and_index_task(self,
     celery_logger.info(f"Unsynced processing stats: {unsync_stats}")
 
     # check for existing embedding files (if last run has exceptions and failed to complete)
-    image_embeddings_file = img_cache_folder / 'image_embeddings_df'
-    text_embeddings_file = img_cache_folder / 'text_embeddings_df'
-    listing_df_file = img_cache_folder / 'listing_df'
+    # image_embeddings_file = img_cache_folder / 'image_embeddings_df'
+    # text_embeddings_file = img_cache_folder / 'text_embeddings_df'
+    # listing_df_file = img_cache_folder / 'listing_df'
     listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
 
     # used to mark delete for incoming image listings
     image_delete_marker = img_cache_folder / 'image_delete_completed'
     text_delete_marker = img_cache_folder / 'text_delete_completed'
 
-    if image_embeddings_file.exists():
-      celery_logger.info(f"Loading existing image embedding file")
-      image_embeddings_df = pd.read_feather(image_embeddings_file)
-    else:
+    image_embeddings_df, image_embeddings_file_used = load_image_embeddings(img_cache_folder, celery_logger)
+    
+    if image_embeddings_df is None:
       # Resolve listings to be processed    
       listing_folders = img_cache_folder.lfre(r'^\d+$')      
       celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
@@ -469,12 +539,10 @@ def embed_and_index_task(self,
                                                         num_workers=num_workers)
       celery_logger.info(f'Ended embedding {len(image_paths)} images')
 
-    if text_embeddings_file.exists() and listing_df_file.exists():
-      celery_logger.info(f"Loading existing text embedding file")
-      text_embeddings_df = pd.read_feather(text_embeddings_file)
-      listing_df = pd.read_feather(listing_df_file)
-    else:
-      # Embed text
+    text_embeddings_df, listing_df, text_embeddings_file_used, listing_df_file_used = load_text_embeddings(img_cache_folder, celery_logger)
+    
+    if text_embeddings_df is None or listing_df is None:
+      # Generate embed text
       # Note: listing_folders must exist since image embedding run first and it is responsible for instantiing it and/or dumping this pickle
       if listing_folders is None:
         listing_folders = load_from_pickle(listing_folders_pickle_file)  
@@ -655,11 +723,11 @@ def embed_and_index_task(self,
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
     if image_embeddings_df is not None and not image_embeddings_df.empty:
-      image_embeddings_df.to_feather(image_embeddings_file)
+      image_embeddings_df.to_feather(img_cache_folder / 'image_embeddings_df')
     if text_embeddings_df is not None and not text_embeddings_df.empty:
-      text_embeddings_df.to_feather(text_embeddings_file)
+      text_embeddings_df.to_feather(img_cache_folder / 'text_embeddings_df')
     if listing_df is not None and not listing_df.empty:
-      listing_df.to_feather(listing_df_file)
+      listing_df.to_feather(img_cache_folder / 'listing_df')
 
   finally:
     if datastore:
@@ -691,13 +759,21 @@ def embed_and_index_task(self,
       log_run(task_start_time, task_end_time, task_status)
 
     if task_status == "Completed":
-      # Remove the temporary embedding files
-      for file in [image_embeddings_file, text_embeddings_file, listing_df_file, 
-                   image_delete_marker, text_delete_marker, 
-                   listing_folders_pickle_file]:
+      # Remove the temporary files
+      files_to_cleanup = [f for f in [
+        image_embeddings_file_used,
+        text_embeddings_file_used,
+        listing_df_file_used,
+        image_delete_marker,
+        text_delete_marker,
+        listing_folders_pickle_file
+      ] if f is not None]
+
+      for file in files_to_cleanup:
         if file.exists():
           try:
             file.unlink()
+            celery_logger.info(f"Deleted {file}")
           except Exception as e:
             celery_logger.warning(f"Failed to delete {file}: {str(e)}")
       return {"status": "Completed", 
