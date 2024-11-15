@@ -110,12 +110,29 @@ def log_run(start_time: datetime, end_time: Optional[datetime], status: str):
     updated_df = run_df
   updated_df.to_csv(run_log_path, index=False)
 
+def retry_batch_insert(func, max_retries=3, *args, **kwargs) -> Tuple[int, int]:
+  """
+  Helper function to retry batch insertions.
+  Returns:
+    Tuple[int, int]: (total_items, failed_count)
+  """
+  for attempt in range(max_retries):
+    total_items, failed_count = func(*args, **kwargs)
+    if failed_count == 0:
+      return total_items, 0
+    celery_logger.warning(f"Batch insert attempt {attempt + 1} had {failed_count} failures, retrying...")
+  
+  # If we get here, we've exhausted all retries
+  celery_logger.error(f"Batch insert failed after {max_retries} attempts")
+  return total_items, failed_count
+
+
 def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame, 
                        listingIds: List[str], 
                        datastore: WeaviateDataStore,
                        aux_key: str,
                        listing_df: pd.DataFrame,
-                       embedding_type: str = 'I') -> int:
+                       embedding_type: str = 'I') -> Tuple[int, int]:
   """
   Function to process embeddings and perform operations(add/delete) on Redis or Weaviate datastore.
 
@@ -129,7 +146,8 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
 
   Note: For image embeddings, remarks are excluded to save space.
 
-  Returns the number of documents inserted.
+  Returns:
+    Tuple[int, int]: (total_items_processed, failed_items_count)
   """
   items_to_process = list(embeddings_df.q("listing_id.isin(@listingIds)")[aux_key].values)
   processed_embeddings_df = embeddings_df.q(f"{aux_key}.isin(@items_to_process)")
@@ -146,14 +164,17 @@ def process_and_batch_insert_to_datastore(embeddings_df: pd.DataFrame,
 
   _df.drop(columns=['jumpId'], inplace=True)
   listing_jsons = _df.to_dict(orient='records')
+  total_items = len(listing_jsons)
 
-  datastore.batch_insert(listing_jsons, 
+  result = datastore.batch_insert(listing_jsons, 
                          embedding_type=embedding_type, 
                          batch_size=1000, 
                          sleep_time=BATCH_INSERT_SLEEP_TIME)   # do we need this sleep if not for using free weaviate cloud.
   # datastore.batch_upsert(listing_jsons, embedding_type=embedding_type)
 
-  return len(listing_jsons)
+  failed_count = len(result['failed_objects'])
+
+  return total_items, failed_count
 
 
 def split_image_embeddings_by_listing_df(embeddings_df: pd.DataFrame, 
@@ -246,12 +267,13 @@ def process_unsync_embedding_file(unsync_embedding_file: Path,
       listing_df
     )
     
-    stats["newly_synced_images"] = len(to_be_indexed_embeddings_df)
+    stats["newly_synced_images"] = 0
     stats["still_unsync"] = len(still_unsync_df)
     
     if len(to_be_indexed_embeddings_df) > 0:
       celery_logger.info(f"Begin batch insert {len(to_be_indexed_embeddings_df)} image embeddings to weaviate")
-      process_and_batch_insert_to_datastore(
+      total_items, failed_count = retry_batch_insert(
+        process_and_batch_insert_to_datastore,
         embeddings_df=to_be_indexed_embeddings_df,
         listingIds=to_be_indexed_embeddings_df['listing_id'].unique(),
         datastore=datastore,
@@ -259,7 +281,10 @@ def process_unsync_embedding_file(unsync_embedding_file: Path,
         listing_df=listing_df,
         embedding_type='I'
       )
-      celery_logger.info(f"Ended batch insert {len(to_be_indexed_embeddings_df)} image embeddings to weaviate")
+      stats["newly_synced_images"] = total_items - failed_count
+      if failed_count > 0:
+        celery_logger.error(f"Failed to insert {failed_count} image embeddings")
+      celery_logger.info(f"Ended batch insert {total_items - failed_count} image embeddings to weaviate")
 
       # Generate and process text embeddings for the listings in listing_df
       celery_logger.info(f'Begin text embedding for {len(listing_df)} listings')
@@ -277,7 +302,9 @@ def process_unsync_embedding_file(unsync_embedding_file: Path,
 
         # Process and index text embeddings
         celery_logger.info(f"Begin batch insert {len(text_embeddings_df)} text embeddings to weaviate")
-        stats["newly_synced_texts"] = process_and_batch_insert_to_datastore(
+        # stats["newly_synced_texts"] = process_and_batch_insert_to_datastore(
+        total_items, failed_count = retry_batch_insert(
+          process_and_batch_insert_to_datastore,
           embeddings_df=text_embeddings_df,
           listingIds=text_embeddings_df['listing_id'].unique(),
           datastore=datastore,
@@ -285,7 +312,10 @@ def process_unsync_embedding_file(unsync_embedding_file: Path,
           listing_df=listing_df,
           embedding_type='T'
         )
-        celery_logger.info(f"Ended batch insert {len(text_embeddings_df)} text embeddings to weaviate")
+        stats['newly_synced_texts'] = total_items - failed_count
+        if failed_count > 0:
+          celery_logger.error(f"Failed to insert {failed_count} text embeddings")
+        celery_logger.info(f"Ended batch insert {total_items - failed_count} text embeddings to weaviate")
     
     # Handle the unsync file based on results
     if len(still_unsync_df) == 0:
@@ -614,7 +644,8 @@ def embed_and_index_task(self,
         celery_logger.info(f"Saved {len(unsync_df)} unsynced image embeddings to {unsync_file}")
 
       celery_logger.info("Begin batch insert image embeddings to weaviate")
-      stats["image_embeddings_inserted"] = process_and_batch_insert_to_datastore(
+      total_items, failed_count = retry_batch_insert(
+        process_and_batch_insert_to_datastore,
         embeddings_df=image_embeddings_df, 
         listingIds=image_embeddings_df['listing_id'].unique(),
         datastore=datastore, 
@@ -622,6 +653,9 @@ def embed_and_index_task(self,
         listing_df=listing_df, 
         embedding_type='I'
       )
+      stats["image_embeddings_inserted"] = total_items - failed_count
+      if failed_count > 0:
+        celery_logger.error(f"Failed to insert {failed_count} image embeddings")
       celery_logger.info("Ended batch insert image embeddings to weaviate")
 
       # Process text embeddings
@@ -643,7 +677,8 @@ def embed_and_index_task(self,
 
       # Insert incoming text embeddings
       celery_logger.info("Begin batch insert text embeddings to weaviate")
-      stats["text_embeddings_inserted"] = process_and_batch_insert_to_datastore(
+      total_items, failed_count = retry_batch_insert(
+        process_and_batch_insert_to_datastore,
         embeddings_df=text_embeddings_df, 
         listingIds=incoming_text_listingIds, 
         datastore=datastore, 
@@ -651,6 +686,9 @@ def embed_and_index_task(self,
         listing_df=listing_df, 
         embedding_type='T'
       )
+      stats["text_embeddings_inserted"] = total_items - failed_count
+      if failed_count > 0:
+        celery_logger.error(f"Failed to insert {failed_count} text embeddings")
       celery_logger.info("Ended batch insert text embeddings to weaviate")
 
     # IMPORTANT: This is now done in celery_delete_inactive, this would be removed eventually.

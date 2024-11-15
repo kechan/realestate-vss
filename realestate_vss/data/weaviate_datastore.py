@@ -324,7 +324,7 @@ class WeaviateDataStore:
         # Preserve remarks from text result if it exists
         if 'remarks' in result and result['remarks']:
           listings_dict[listingId]['remarks'] = result['remarks']
-          
+
         # Add score to agg_score
         listings_dict[listingId]['agg_score'] += result['agg_score']
       else:
@@ -881,7 +881,20 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
 
   @retry(**RETRY_SETTINGS)
-  def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I', batch_size=1000, sleep_time=1):
+  def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I', batch_size=1000, sleep_time=1) -> Dict[str, List[Dict]]:
+    """
+    Batch insert listings into Weaviate.
+    
+    Args:
+      listings: Iterable of listing dictionaries to insert
+      embedding_type: 'I' for image embeddings, 'T' for text embeddings
+      batch_size: Size of each batch
+      sleep_time: Time to sleep between batches
+    
+    Returns:
+      Dict containing:
+        - failed_objects: list of objects that failed to insert
+    """
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     collection = self.client.collections.get(collection_name)
 
@@ -889,22 +902,60 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       for i in range(0, len(iterable), size):
         yield iterable[i:i + size]
                        
+    total_processed = 0
+    total_failed = 0
+    all_failed_objects = []
+
     try:
       for batch_listings in chunks(list(listings), batch_size):
         with collection.batch.dynamic() as batch:
           for listing_json in tqdm(batch_listings):
 
-            listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
-            key = self._create_key(listing_json, embedding_type)
+            try:
+              listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
+              key = self._create_key(listing_json, embedding_type)
+              vector = listing_json.pop('embedding')
 
-            vector = listing_json.pop('embedding')
+              batch.add_object(
+                properties=listing_json,
+                uuid=key,
+                vector=vector
+              )
+              total_processed += 1
+            except Exception as e:
+              self.logger.error(f"Error adding object to batch: {str(e)}")
+              continue
 
-            batch.add_object(
-              properties=listing_json,
-              uuid=key,
-              vector=vector
-            )
+          # After the batch is processed, check for failed objects
+          if hasattr(batch, 'failed_objects') and batch.failed_objects:
+            failed_count = len(batch.failed_objects)
+            total_failed += failed_count
+            all_failed_objects.extend(batch.failed_objects)
+            
+            self.logger.error(f"Batch insertion had {failed_count} failures")
+            
+            # Log details of first few failed objects (to avoid excessive logging)
+            for failed_obj in batch.failed_objects[:3]:  # Show first 3 failures
+              self.logger.error(f"Failed object example: {failed_obj}")
+            
+            if len(batch.failed_objects) > 3:
+              self.logger.error(f"... and {len(batch.failed_objects) - 3} more failures")
+
         time.sleep(sleep_time)
+
+      # Log final statistics
+      success_rate = ((total_processed - total_failed) / total_processed * 100) if total_processed > 0 else 0
+
+      self.logger.info(f"""
+      Batch insertion completed:
+      - Total processed: {total_processed}
+      - Successfully inserted: {total_processed - total_failed}
+      - Failed insertions: {total_failed}
+      - Success rate: {success_rate:.2f}%
+      """)
+
+      return {"failed_objects": all_failed_objects}
+
     except Exception as e:
       self.logger.error(f"Error batch inserting objects: {e}")
       raise
