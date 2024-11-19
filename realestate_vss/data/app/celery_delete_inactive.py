@@ -1,5 +1,5 @@
-from typing import Optional, Dict
-import os, gc
+from typing import Optional, Dict, Tuple
+import os, time, gc
 from datetime import datetime, timedelta
 
 from celery import Celery
@@ -88,6 +88,35 @@ def log_delete_run(start_time: datetime, end_time: Optional[datetime], status: s
   
   updated_df.to_csv(log_path, index=False)    
 
+def retry_batch_delete(func, max_retries=3, *args, **kwargs) -> Tuple[int, Dict]:
+  """
+  Helper function to retry batch deletions.
+  
+  Args:
+    func: The deletion function to retry
+    max_retries: Maximum number of retry attempts
+    *args, **kwargs: Arguments to pass to the deletion function
+  
+  Returns:
+    Tuple[int, Dict]: (total_objects_deleted, failed_batches_info)
+  """
+  for attempt in range(max_retries):
+    deletion_stats = func(*args, **kwargs)
+    if deletion_stats.get('error_count', 0) == 0 and 'fatal_error' not in deletion_stats:
+      return deletion_stats['total_objects_deleted'], {}
+    
+    celery_logger.warning(
+      f"Batch deletion attempt {attempt + 1} had {deletion_stats.get('error_count', 0)} failures, "
+      f"retrying in {2 ** attempt} seconds..."
+    )
+    time.sleep(2 ** attempt)  # Exponential backoff
+  
+  # If we get here, we've exhausted all retries
+  celery_logger.error(f"Batch deletion failed after {max_retries} attempts")
+  return deletion_stats.get('total_objects_deleted', 0), deletion_stats.get('failed_batches', [])
+
+
+
 @celery.task(bind=True, max_retries=3)
 def delete_inactive_listings_task(self, batch_size=20, sleep=0.5):
   """
@@ -112,7 +141,8 @@ def delete_inactive_listings_task(self, batch_size=20, sleep=0.5):
 
   stats = {
     "total_listings_deleted": 0,
-    "total_embeddings_deleted": 0
+    "total_embeddings_deleted": 0,
+    "failed_listings": []
   }
 
   try:
@@ -152,21 +182,43 @@ def delete_inactive_listings_task(self, batch_size=20, sleep=0.5):
       deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
 
       if len(deleted_listings_df) > 0:
-        count_b4_del = datastore.count_all()
+        # count_b4_del = datastore.count_all()
         deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
-
         celery_logger.info(f'Removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
 
-        datastore.delete_listings_by_batch(
+        # datastore.delete_listings_by_batch(
+        #   listing_ids=deleted_listing_ids,
+        #   batch_size=batch_size,
+        #   sleep_time=sleep
+        # )
+
+        embeddings_deleted, failed_batches = retry_batch_delete(
+          datastore.delete_listings_by_batch,
           listing_ids=deleted_listing_ids,
           batch_size=batch_size,
           sleep_time=sleep
         )
+        # count_after_del = datastore.count_all()
 
-        count_after_del = datastore.count_all()
+        if failed_batches:
+          # Collect failed listing IDs
+          failed_listing_ids = set()
+          for batch in failed_batches:
+            failed_listing_ids.update(batch['listing_ids'])
+          stats['failed_listings'] = list(failed_listing_ids)
 
-        stats['total_listings_deleted'] = len(deleted_listing_ids)
-        stats['total_embeddings_deleted'] = count_b4_del - count_after_del
+          error_message = f"Failed to delete {len(failed_listing_ids)} listings after retries"
+          celery_logger.error(error_message)
+
+          # If we have task-level retries left, retry the whole task
+          if self.request.retries < self.max_retries:
+            raise self.retry(
+              exc=Exception(error_message),
+              countdown=300 * (self.request.retries + 1)  # Exponential backoff
+            )        
+
+        stats['total_listings_deleted'] = len(deleted_listing_ids) - len(stats['failed_listings'])
+        stats['total_embeddings_deleted'] = embeddings_deleted
 
         celery_logger.info(f'Successfully removed {stats["total_listings_deleted"]} listings '
                           f'({stats["total_embeddings_deleted"]} embeddings)')
@@ -215,3 +267,5 @@ def delete_inactive_listings_task(self, batch_size=20, sleep=0.5):
         "start_time": task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
         "end_time": task_end_time.strftime("%Y-%m-%d %H:%M:%S")
       }
+    
+

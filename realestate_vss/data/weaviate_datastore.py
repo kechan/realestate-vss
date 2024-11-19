@@ -605,28 +605,90 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       self.delete_listing(listing_id, embedding_type=embedding_type)
 
   @retry(**RETRY_SETTINGS)
-  def delete_listings_by_batch(self, listing_ids: List[str], embedding_type: str = None, batch_size: int = 100, sleep_time: int = 0):
+  def delete_listings_by_batch(self, listing_ids: List[str], embedding_type: str = None, batch_size: int = 100, sleep_time: int = 0) -> Dict[str, Any]:
     """
     Delete objects related to multiple listing_ids and embedding_type by batch of batch_size.
     If embedding_type is None, delete all objects related to the listing_ids.
+
+    Args:
+      listing_ids: List of listing IDs to delete
+      embedding_type: 'I' for image, 'T' for text, None for both
+      batch_size: Number of listings to process in each batch
+      sleep_time: Time to sleep between batches
+      
+    Returns:
+        Dict containing deletion statistics:
+        {
+            'total_objects_deleted': Number of objects deleted,
+            'failed_batches': List of failed batch information,
+            'error_count': Total number of errors encountered
+        }
     """
-    if embedding_type == 'I' or embedding_type is None:
-      collection = self.client.collections.get("Listing_Image")
-      for i in tqdm(range(0, len(listing_ids), batch_size)):
-        batch_ids = listing_ids[i:i+batch_size]
-        collection.data.delete_many(
-          where=Filter.by_property("listing_id").contains_any(batch_ids)
+    stats = {
+      'total_objects_deleted': 0,
+      'failed_batches': [],
+      'error_count': 0
+    }
+
+    try:
+      count_before = self.count_all()
+
+      if embedding_type == 'I' or embedding_type is None:
+        collection = self.client.collections.get("Listing_Image")
+        for i in tqdm(range(0, len(listing_ids), batch_size), desc="Deleting image embeddings"):
+          batch_ids = listing_ids[i:i+batch_size]
+          try:
+            collection.data.delete_many(
+              where=Filter.by_property("listing_id").contains_any(batch_ids)
+            )
+            time.sleep(sleep_time)
+          except UnexpectedStatusCodeError as e:
+            error_info = {
+              'batch_start_idx': i,
+              'listing_ids': batch_ids,
+              'error': str(e),
+              'type': 'image'
+            }
+            stats['failed_batches'].append(error_info)
+            stats['error_count'] += 1
+            self.logger.error(f"Failed to delete image batch starting at index {i}: {str(e)}")
+      
+      if embedding_type == 'T' or embedding_type is None:
+        collection = self.client.collections.get("Listing_Text")
+        for i in tqdm(range(0, len(listing_ids), batch_size), desc="Deleting text embeddings"):
+          batch_ids = listing_ids[i:i+batch_size]
+          try:
+            collection.data.delete_many(
+              where=Filter.by_property("listing_id").contains_any(batch_ids)
+            )
+            time.sleep(sleep_time)
+          except UnexpectedStatusCodeError as e:
+            error_info = {
+              'batch_start_idx': i,
+              'listing_ids': batch_ids,
+              'error': str(e),
+              'type': 'text'
+            }
+            stats['failed_batches'].append(error_info)
+            stats['error_count'] += 1
+            self.logger.error(f"Failed to delete text batch starting at index {i}: {str(e)}")
+
+      stats['total_objects_deleted'] = count_before - self.count_all()
+      if stats['error_count'] > 0:
+        self.logger.error(
+          f"Completed with {stats['error_count']} failed batches. "
+          f"Deleted {stats['total_objects_deleted']} objects. "
+          "See 'failed_batches' in return value for details."
         )
-        time.sleep(sleep_time)
-    
-    if embedding_type == 'T' or embedding_type is None:
-      collection = self.client.collections.get("Listing_Text")
-      for i in tqdm(range(0, len(listing_ids), batch_size)):
-        batch_ids = listing_ids[i:i+batch_size]
-        collection.data.delete_many(
-          where=Filter.by_property("listing_id").contains_any(batch_ids)
-        )
-        time.sleep(sleep_time)
+      else:
+        self.logger.info(f"Successfully deleted {stats['total_objects_deleted']} objects")
+
+      return stats
+    except Exception as e:
+      self.logger.error(f"Fatal error in batch deletion: {str(e)}")
+      stats['fatal_error'] = str(e)
+      return stats
+
 
 
   def count_all(self) -> int:
@@ -926,20 +988,23 @@ class WeaviateDataStore_v4(WeaviateDataStore):
               self.logger.error(f"Error adding object to batch: {str(e)}")
               continue
 
-          # After the batch is processed, check for failed objects
-          if hasattr(batch, 'failed_objects') and batch.failed_objects:
-            failed_count = len(batch.failed_objects)
-            total_failed += failed_count
-            all_failed_objects.extend(batch.failed_objects)
-            
-            self.logger.error(f"Batch insertion had {failed_count} failures")
-            
-            # Log details of first few failed objects (to avoid excessive logging)
-            for failed_obj in batch.failed_objects[:3]:  # Show first 3 failures
-              self.logger.error(f"Failed object example: {failed_obj}")
-            
-            if len(batch.failed_objects) > 3:
-              self.logger.error(f"... and {len(batch.failed_objects) - 3} more failures")
+        # After the batch is processed, check for failed objects
+        failed_objects = collection.batch.failed_objects
+
+        # if hasattr(batch, 'failed_objects') and batch.failed_objects:
+        failed_count = len(failed_objects)
+        total_failed += failed_count
+        all_failed_objects.extend(failed_objects)
+        
+        self.logger.info(f"Batch insertion had {failed_count} failures")
+        
+        if failed_count > 0:
+          # Log details of first few failed objects (to avoid excessive logging)
+          for failed_obj in failed_objects[:3]:  # Show first 3 failures
+            self.logger.error(f"Failed object example: {failed_obj}")
+        
+          if failed_count > 3:
+            self.logger.error(f"... and {failed_count - 3} more failures")
 
         time.sleep(sleep_time)
 
