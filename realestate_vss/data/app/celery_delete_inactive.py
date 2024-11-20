@@ -22,12 +22,12 @@ celery.conf.update(
   worker_redirect_stdouts_level='INFO',
 
   # configs for reliability
-  broker_heartbeat=10,                    # More frequent heartbeats
-  broker_connection_timeout=30,           # Longer connection timeout
+  broker_heartbeat=60,                    # More frequent heartbeats
+  broker_connection_timeout=300,           # Longer connection timeout
   worker_prefetch_multiplier=1,           # Process one task at a time
   worker_concurrency=1,                   # Single worker process
-  task_time_limit=3600,                  # 1 hour max task runtime
-  task_soft_time_limit=3300,             # 55 minutes soft limit
+  task_time_limit=300,                  # 5 min max task runtime
+  task_soft_time_limit=280,             # 4 min 40 sec soft time limit
   worker_max_tasks_per_child=1,          # Restart worker after each task
   broker_pool_limit=None,                # Don't limit connection pool
 
@@ -137,7 +137,7 @@ def load_shard_file(shard_path: Path) -> List[str]:
 
 
 
-@celery.task(bind=True, max_retries=3)
+@celery.task(bind=True, max_retries=3, acks_late=False, track_started=True)
 def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sleep=0.5):
   """
   Task to delete inactive, delisted, or sold listings from Weaviate based on BigQuery data.
@@ -154,6 +154,7 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
   from realestate_analytics.data.bq import BigQueryDatastore
   from dotenv import load_dotenv, find_dotenv
 
+  task_start_time = datetime.now()
   datastore, bq_datastore = None, None
   task_status = 'Failed'
   error_message = None
@@ -242,7 +243,7 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
 
     # 2nd: Always check BQ for new deletions
     last_run = get_last_delete_time()
-    task_start_time = datetime.now()
+    bq_query_start_time = datetime.now()
     celery_logger.info("This is the first run." if last_run is None else f"Last run: {last_run}")
     celery_logger.info(f"Last run was {last_run}")
 
@@ -266,7 +267,8 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
       else:
         celery_logger.info('No deleted listings found since last run.')
 
-    set_last_delete_time(task_start_time)
+    set_last_delete_time(bq_query_start_time)
+    celery_logger.info(f'Setting last run to {bq_query_start_time}')
     task_status = 'Completed'
 
   except SoftTimeLimitExceeded:
@@ -293,6 +295,7 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
     log_delete_run(task_start_time, task_end_time, task_status, stats)
 
     if task_status == "Completed":
+      # self.request.acknowledge()
       return {
         "status": "Completed",
         "message": "Deletion of inactive listings completed successfully",
