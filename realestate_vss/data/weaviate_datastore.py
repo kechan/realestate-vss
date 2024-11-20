@@ -16,6 +16,8 @@ from realestate_core.common.utils import join_df, save_to_pickle, load_from_pick
 from realestate_vision.common.utils import get_listingId_from_image_name
 
 from weaviate.exceptions import ObjectAlreadyExistsException, UnexpectedStatusCodeException
+from requests.exceptions import ConnectionError, Timeout
+
 from weaviate.client import WeaviateAsyncClient
 
 try:
@@ -638,11 +640,13 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         for i in tqdm(range(0, len(listing_ids), batch_size), desc="Deleting image embeddings"):
           batch_ids = listing_ids[i:i+batch_size]
           try:
-            collection.data.delete_many(
+            result = collection.data.delete_many(
               where=Filter.by_property("listing_id").contains_any(batch_ids)
             )
+            stats['error_count'] += result.failed
             time.sleep(sleep_time)
-          except UnexpectedStatusCodeError as e:
+          except (UnexpectedStatusCodeError, ConnectionError, TimeoutError) as e:
+            self.logger.error("UnexpectedStatusCodeError, ConnectionError, TimeoutError during batch deletion")
             error_info = {
               'batch_start_idx': i,
               'listing_ids': batch_ids,
@@ -658,11 +662,13 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         for i in tqdm(range(0, len(listing_ids), batch_size), desc="Deleting text embeddings"):
           batch_ids = listing_ids[i:i+batch_size]
           try:
-            collection.data.delete_many(
+            result = collection.data.delete_many(
               where=Filter.by_property("listing_id").contains_any(batch_ids)
             )
+            stats['error_count'] += result.failed
             time.sleep(sleep_time)
-          except UnexpectedStatusCodeError as e:
+          except (UnexpectedStatusCodeError, ConnectionError, TimeoutError) as e:
+            self.logger.error("UnexpectedStatusCodeError, ConnectionError, TimeoutError during batch deletion")
             error_info = {
               'batch_start_idx': i,
               'listing_ids': batch_ids,

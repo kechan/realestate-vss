@@ -264,7 +264,7 @@ async def delete_inactive(batch_size: int = Query(20), sleep_time: float = Query
     sleep_time: Sleep time between batches in seconds
   """
   task = delete_inactive_listings_task.apply_async(
-    args=[batch_size, sleep_time],
+    args=[str(img_cache_folder), batch_size, sleep_time],
     queue='delete_inactive_queue'
   )
   
