@@ -320,7 +320,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
     if tokenize_sentences and self.nlp is None:
       self.nlp = spacy.load('en_core_web_sm')
 
-    jumpIds, text_embeddings, remark_chunk_ids, tokenized_sentences = [], [], [], []
+    jumpIds, text_embeddings, remark_chunk_ids, tokenized_sentences, chunk_starts, chunk_ends = [], [], [], [], [], []
 
     if not use_dataloader:
 
@@ -338,6 +338,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
       else:
         # Initialize lists to store the sentences, jumpIds, and chunk_ids for each batch
         sentence_batch, jumpId_batch, chunk_id_batch = [], [], []
+        chunk_starts_batch, chunk_ends_batch = [], []
 
         for _, row in tqdm(df.iterrows(), total=df.shape[0], desc="Processing remarks"):
           jump_id = row['jumpId']
@@ -347,23 +348,25 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
           if tokenize_sentences:
               if isinstance(remark, str) and remark.strip():
                   doc = self.nlp(remark)
-                  sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+                  sentences = [(sent.text.strip(), sent.start_char, sent.end_char) for sent in doc.sents if sent.text.strip()]
                   if not sentences:
                       # Handle cases where SpaCy fails to tokenize into sentences
-                      sentences = [remark.strip()]
+                      sentences = [(remark.strip(), 0, len(remark.strip()))]
               else:
                   # Handle empty or non-string remarks
-                  sentences = ['']
+                  sentences = [("", 0, 0)]
           else:
-              sentences = [remark.strip()] if isinstance(remark, str) else ['']
+              sentences = [(remark.strip(), 0, len(remark.strip()))] if isinstance(remark, str) else [("", 0, 0)]
 
           # Iterate through each sentence and prepare batch lists
-          for sent_idx, sentence in enumerate(sentences):
+          for sent_idx, (sentence, start, end) in enumerate(sentences):
               remark_chunk_id = f"{jump_id}_{sent_idx}"
 
               sentence_batch.append(sentence)
               jumpId_batch.append(jump_id)
               chunk_id_batch.append(remark_chunk_id)
+              chunk_starts_batch.append(start)
+              chunk_ends_batch.append(end)
 
               # If the batch size is reached, encode and reset the batch lists
               if len(sentence_batch) >= batch_size:
@@ -377,9 +380,11 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
                   jumpIds.extend(jumpId_batch)
                   remark_chunk_ids.extend(chunk_id_batch)
                   tokenized_sentences.extend(sentence_batch)
+                  chunk_starts.extend(chunk_starts_batch)
+                  chunk_ends.extend(chunk_ends_batch)
 
                   # Clear the batch lists for the next batch
-                  sentence_batch, jumpId_batch, chunk_id_batch = [], [], []
+                  sentence_batch, jumpId_batch, chunk_id_batch, chunk_starts_batch, chunk_ends_batch = [], [], [], [], []
 
         # After processing all rows, handle any remaining sentences in the batch
         if sentence_batch:
@@ -391,6 +396,8 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
             jumpIds.extend(jumpId_batch)
             remark_chunk_ids.extend(chunk_id_batch)
             tokenized_sentences.extend(sentence_batch)
+            chunk_starts.extend(chunk_starts_batch)
+            chunk_ends.extend(chunk_ends_batch)
 
     else:          
       dataset = ListingTextDatasetOpenClip(df, tokenize_sentences)
@@ -401,7 +408,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
           batch_jumpIds, batch_remarks = batch
           
           if tokenize_sentences:
-            sentence_batch, jumpId_batch, chunk_id_batch = [], [], []
+            sentence_batch, jumpId_batch, chunk_id_batch, chunk_start_batch, chunk_end_batch = [], [], [], [], []
             for idx, remark in enumerate(batch_remarks):
               if remark:
                 doc = self.nlp(remark)
@@ -411,6 +418,8 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
                 sentence_batch.append(sent.text)
                 jumpId_batch.append(batch_jumpIds[idx])
                 chunk_id_batch.append(f"{batch_jumpIds[idx]}_{sent_idx}")
+                chunk_start_batch.append(sent.start_char)
+                chunk_end_batch.append(sent.end_char)
             
             if sentence_batch:  # Process sentences if any
               text_inputs = self.tokenizer(sentence_batch).to(self.device, non_blocking=NON_BLOCKING)
@@ -418,6 +427,9 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
               text_embeddings.extend(list(text_features))
               jumpIds.extend(jumpId_batch)
               remark_chunk_ids.extend(chunk_id_batch)
+              chunk_starts.extend(chunk_start_batch)
+              chunk_ends.extend(chunk_end_batch)
+
           else:
             text_inputs = self.tokenizer(batch_remarks).to(self.device, non_blocking=NON_BLOCKING)
             text_features = self.model.encode_text(text_inputs, normalize=True).cpu().numpy()
@@ -426,7 +438,7 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
 
     if return_df:
       if tokenize_sentences:
-        return pd.DataFrame(data={'listing_id': jumpIds, 'remark_chunk_id': remark_chunk_ids, 'sentence': tokenized_sentences, 'embedding': text_embeddings})
+        return pd.DataFrame(data={'listing_id': jumpIds, 'remark_chunk_id': remark_chunk_ids, 'sentence': tokenized_sentences, 'chunk_start': chunk_starts, 'chunk_end': chunk_ends, 'embedding': text_embeddings})
       else:
         return pd.DataFrame(data={'listing_id': jumpIds, 'embedding': text_embeddings})
     else:

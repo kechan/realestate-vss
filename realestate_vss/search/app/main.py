@@ -446,6 +446,7 @@ class ListingSearchResult(ListingData):
   agg_score: float
   image_names: Optional[List[str]] = None
   remark_chunk_ids: Optional[List[str]] = None
+  remark_chunk_pos: Optional[List[List[int]]] = None
 
 class PartialListingData(BaseModel):
   jumpId: Optional[str] = None

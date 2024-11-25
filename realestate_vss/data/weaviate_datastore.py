@@ -133,7 +133,7 @@ class WeaviateDataStore:
     if embedding_type == 'I':
       wanted_properties = self.common_properties + ['image_name']
     else:
-      wanted_properties = self.common_properties + ['remark_chunk_id']
+      wanted_properties = self.common_properties + ['remark_chunk_id', 'chunk_start', 'chunk_end']
 
     # keep only keys that are in self.common_properties and 'embedding'
     property_keys = [p for p in wanted_properties] + ['embedding']
@@ -250,6 +250,7 @@ class WeaviateDataStore:
   def _text_search_groupby_listing(self, 
                                    remark_chunk_ids: List[str], 
                                    scores: List[float],
+                                   positions: List[Tuple[int, int]],
                                    include_all_fields: bool = False,
                                    all_json_fields: Dict[str, Any] = None
                                    ) -> List[Dict[str, Union[str, float, List[str]]]]:
@@ -262,14 +263,17 @@ class WeaviateDataStore:
       """
       listingId_to_remark_chunk_ids = {}
       listingId_to_scores = {}
-      for remark_chunk_id, score in zip(remark_chunk_ids, scores):
+      listingId_to_positions = {}
+      for remark_chunk_id, score, pos in zip(remark_chunk_ids, scores, positions):
         listingId = remark_chunk_id.split('_')[0]  # Assuming the format is {listingId}_{chunkId}
         if listingId not in listingId_to_remark_chunk_ids:
           listingId_to_remark_chunk_ids[listingId] = []
           listingId_to_scores[listingId] = []
+          listingId_to_positions[listingId] = []
 
         listingId_to_remark_chunk_ids[listingId].append(remark_chunk_id)
         listingId_to_scores[listingId].append(score)
+        listingId_to_positions[listingId].append(pos)
 
       listings = []
       for listingId, remark_chunk_ids in listingId_to_remark_chunk_ids.items():
@@ -284,6 +288,7 @@ class WeaviateDataStore:
           'listingId': listingId,
           "agg_score": float(agg_score),
           "remark_chunk_ids": remark_chunk_ids,
+          "remark_chunk_pos": listingId_to_positions[listingId]
         })
 
       # Sort the listings by average score in descending order
@@ -469,7 +474,9 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     )
 
     listing_text_properties = common_properties + [
-      Property(name="remark_chunk_id", data_type=DataType.TEXT)
+      Property(name="remark_chunk_id", data_type=DataType.TEXT),
+      Property(name="chunk_start", data_type=DataType.INT),
+      Property(name="chunk_end", data_type=DataType.INT)
     ]
 
     self.client.collections.create(
@@ -1116,12 +1123,19 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       filters=weaviate_filters
     )
 
-    top_remark_chunk_ids, top_scores = [], []
+    top_remark_chunk_ids, top_scores, top_positions = [], [], []
     all_json_fields = {}
+
     for o in response.objects:
       top_remark_chunk_ids.append(o.properties['remark_chunk_id'])
       score = (1 - o.metadata.distance)   # such that higher score is better match
       top_scores.append(score)
+
+      start = o.properties['chunk_start']
+      end = o.properties['chunk_end']
+      start = int(start) if start is not None else 0
+      end = int(end) if end is not None else 0
+      top_positions.append((start, end))
 
       json_fields = self._postprocess_listing_json(o.properties)
 
@@ -1133,7 +1147,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
 
     if group_by_listingId:
-      return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
+      return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, top_positions, include_all_fields, all_json_fields)
  
     return top_remark_chunk_ids, top_scores
 
@@ -1194,12 +1208,19 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       filters=weaviate_filters
     )
 
-    top_remark_chunk_ids, top_scores = [], []
+    top_remark_chunk_ids, top_scores, top_positions = [], [], []
     all_json_fields = {}
+
     for o in response.objects:
       top_remark_chunk_ids.append(o.properties['remark_chunk_id'])
       score = (1 - o.metadata.distance)
       top_scores.append(score)
+
+      start = o.properties['chunk_start']
+      end = o.properties['chunk_end']
+      start = int(start) if start is not None else 0
+      end = int(end) if end is not None else 0
+      top_positions.append((start, end))
 
       json_fields = self._postprocess_listing_json(o.properties)
 
@@ -1211,7 +1232,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
 
     if group_by_listingId:
-      return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, include_all_fields, all_json_fields)
+      return self._text_search_groupby_listing(top_remark_chunk_ids, top_scores, top_positions, include_all_fields, all_json_fields)
     
     return top_remark_chunk_ids, top_scores
       
@@ -1575,6 +1596,7 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
       raise
 
     top_ids, top_scores = [], []
+    top_positions = []     # only for text search results
     all_json_fields = {}
     property_key = 'image_name' if embedding_type == 'I' else 'remark_chunk_id'
 
@@ -1583,20 +1605,26 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
       score = (1 - o.metadata.distance)   # such that higher score is better match
       top_scores.append(score)
 
+      if embedding_type == 'T':
+        start = o.properties['chunk_start']
+        end = o.properties['chunk_end']
+        start = int(start) if start is not None else 0
+        end = int(end) if end is not None else 0
+        top_positions.append((start, end))
+
       json_fields = self._postprocess_listing_json(o.properties)
 
       listing_id = o.properties['listing_id']
       if include_all_fields:
         all_json_fields[listing_id] = json_fields
-      else:
-        # only incl. remarks
-        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}
+      else:      
+        all_json_fields[listing_id] = {'remarks': json_fields.get('remarks', '')}   # only incl. remarks      
 
     if group_by_listingId:
       if embedding_type == 'I':
         return self._image_search_groupby_listing(top_ids, top_scores, include_all_fields, all_json_fields)
       else:
-        return self._text_search_groupby_listing(top_ids, top_scores, include_all_fields, all_json_fields)
+        return self._text_search_groupby_listing(top_ids, top_scores, top_positions, include_all_fields, all_json_fields)
 
     return top_ids, top_scores
 
