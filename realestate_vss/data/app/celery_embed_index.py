@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Union, Any, Tuple
-import os, shutil, gc
+import os, shutil, html, gc
 from datetime import datetime, timedelta
 
 from celery import Celery
@@ -14,6 +14,7 @@ import torch
 
 from realestate_vss.models.embedding import OpenClipImageEmbeddingModel, OpenClipTextEmbeddingModel
 from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
+from realestate_vss.utils.email import send_email_alert
 
 from realestate_vss.data.es_client import ESClient
 import realestate_core.common.class_extensions
@@ -433,6 +434,69 @@ def load_text_embeddings(img_cache_folder: Path, logger) -> Tuple[pd.DataFrame, 
   return None, None, None, None
 
 
+def send_insert_failure_alert(embedding_stats: Dict[str, int],
+                           task_id: str,
+                           error_message: Optional[str] = None,
+                           embedding_type: str = 'unknown'):
+  """
+  Send an email alert for failed embedding insertions.
+
+  Args:
+    embedding_stats: Dictionary containing embedding/insertion statistics
+    task_id: The Celery task ID
+    error_message: Optional error message/exception to include in the alert
+    embedding_type: Type of embeddings being processed ('I' for image, 'T' for text)
+  """
+  try:
+    _ = load_dotenv(find_dotenv())
+
+    sender_email = os.getenv('VSS_SENDER_EMAIL')
+    receiver_emails = os.getenv('VSS_RECEIVER_EMAILS', '')
+    if receiver_emails:
+      receiver_emails = receiver_emails.split(',')
+    email_password = os.getenv('VSS_EMAIL_PASSWORD')
+
+    if not all([sender_email, email_password, receiver_emails]):
+      missing_vars = []
+      if not sender_email:
+        missing_vars.append('VSS_SENDER_EMAIL')
+      if not email_password:
+        missing_vars.append('VSS_EMAIL_PASSWORD')
+      if not receiver_emails:
+        missing_vars.append('VSS_RECEIVER_EMAILS')
+      
+      celery_logger.error(f"Missing required email credentials: {', '.join(missing_vars)}")
+      return
+
+    embedding_type_name = 'Image' if embedding_type == 'I' else 'Text' if embedding_type == 'T' else 'Unknown'
+    subject = f"VSS Embed/Index Task Failure Alert - Task ID: {task_id}"
+
+    html_content = f"""
+    <html>
+    <body>
+      <h2>VSS Embed/Index Task Failure Alert</h2>
+      <p>Task ID: {task_id}</p>
+      <p>Status: <span style="color:red">FAILED</span></p>
+      <p>Embedding Type: {embedding_type_name}</p>
+
+      {f'<p>Error: <span style="color:red">{error_message}</span></p>' if error_message else ''}
+
+      <h3>Embedding Statistics:</h3>
+      <ul>
+        <li>Total Listings Processed: {embedding_stats.get('total_processed', embedding_stats.get('total_listings_processed', 0))}</li>
+        <li>Image Embeddings Inserted: {embedding_stats.get('newly_synced_images', embedding_stats.get('image_embeddings_inserted', 0))}</li>
+        <li>Text Embeddings Inserted: {embedding_stats.get('newly_synced_texts', embedding_stats.get('text_embeddings_inserted', 0))}</li>
+      </ul>
+
+      <p>Please check the logs for more details.</p>
+    </body>
+    </html>
+    """
+    
+    send_email_alert(subject, html_content, sender_email, receiver_emails, email_password)
+  except Exception as e:
+    celery_logger.error(f"Failed to send embed/index failure alert: {str(e)}")
+    
 @celery.task(bind=True, max_retries=3)
 def embed_and_index_task(self, 
                         img_cache_folder: str, 
@@ -486,9 +550,9 @@ def embed_and_index_task(self,
     if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
       raise ValueError("USE_WEAVIATE not set to 'true' in .env, this task is only for Weaviate")
     if "ES_HOST" in os.environ and "ES_PORT" in os.environ and "ES_LISTING_INDEX_NAME" in os.environ:
-      es_host = Path(os.environ["ES_HOST"])
-      es_port = Path(os.environ["ES_PORT"])
-      listing_index_name = Path(os.environ["ES_LISTING_INDEX_NAME"])
+      es_host = os.environ["ES_HOST"]
+      es_port = int(os.environ["ES_PORT"])
+      listing_index_name = os.environ["ES_LISTING_INDEX_NAME"]
     else:
       raise ValueError("ES_HOST, ES_PORT and ES_LISTING_INDEX_NAME not found in .env")
     
@@ -528,11 +592,23 @@ def embed_and_index_task(self,
     datastore = WeaviateDataStore(client=client, image_embedder=None, text_embedder=None)
     if not datastore.ping():
       celery_logger.info('Weaviate is not accessible. Exiting...')
+      send_insert_failure_alert(
+        embedding_stats=stats,
+        task_id=self.request.id,
+        error_message="Weaviate is not accessible.",
+        embedding_type='unknown'
+      )
       return
 
     es = ESClient(host=es_host, port=es_port, index_name=listing_index_name, fields=es_fields)
     if not es.ping():
       celery_logger.info('ES is not accessible. Exiting...')
+      send_insert_failure_alert(
+          embedding_stats=stats,
+          task_id=self.request.id,
+          error_message="Elasticsearch is not accessible.",
+          embedding_type='unknown'
+      )
       return
     
     # process any existing unsynced image embeddings first
@@ -655,7 +731,16 @@ def embed_and_index_task(self,
       )
       stats["image_embeddings_inserted"] = total_items - failed_count
       if failed_count > 0:
-        celery_logger.error(f"Failed to insert {failed_count} image embeddings")
+        timestamp = datetime.now().strftime("%Y%m%d%H%M")
+        error_message = f"Failed to insert {failed_count} image embeddings (timestamp: {timestamp})"
+        celery_logger.error(error_message)
+        send_insert_failure_alert(
+          embedding_stats=stats,
+          task_id=self.request.id,
+          error_message=error_message,
+          embedding_type='I'
+        )
+
       celery_logger.info("Ended batch insert image embeddings to weaviate")
 
       # Process text embeddings
@@ -688,31 +773,18 @@ def embed_and_index_task(self,
       )
       stats["text_embeddings_inserted"] = total_items - failed_count
       if failed_count > 0:
-        celery_logger.error(f"Failed to insert {failed_count} text embeddings")
+        timestamp = datetime.now().strftime("%Y%m%d%H%M")
+        error_message = f"Failed to insert {failed_count} text embeddings (timestamp: {timestamp})"
+        celery_logger.error(error_message)
+        send_insert_failure_alert(
+          embedding_stats=stats,
+          task_id=self.request.id,
+          error_message=error_message,
+          embedding_type='T'
+        )
       celery_logger.info("Ended batch insert text embeddings to weaviate")
 
-    # IMPORTANT: This is now done in celery_delete_inactive, this would be removed eventually.
-
-    # Delete (delisted, sold, or inactive) from Weaviate listings obtained from BQ (for deleted listings)
-    # if last_run is not None:
-    #   bq_datastore = BigQueryDatastore()   # figure this out from big query
-    #   deleted_listings_df = bq_datastore.get_deleted_listings(start_time=last_run)
-    #   if len(deleted_listings_df) > 0:
-    #     count_before_del = datastore.count_all()
-    #     deleted_listing_ids = deleted_listings_df['listingId'].unique().tolist()
-    #     celery_logger.info(f'Begin removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
-
-    #     datastore.delete_listings_by_batch(listing_ids=deleted_listing_ids, 
-    #                                        batch_size=20, 
-    #                                        sleep_time=DELETE_BQ_LISTINGS_SLEEP_TIME)
-    #     count_after_del = datastore.count_all()
-    #     celery_logger.info(f'Ended removing {len(deleted_listing_ids)} deleted listings from Weaviate since {last_run}')
-
-    #     stats["total_listings_deleted"] = len(deleted_listing_ids)
-    #     stats["total_embeddings_deleted"] = count_before_del - count_after_del
-    # else:
-    #   celery_logger.info(f'Skipping deletion of deleted listings (first run or intentional skip)')
-    
+   
     set_last_run_time(task_start_time)
 
     # delete all processed listing folders
@@ -769,6 +841,12 @@ def embed_and_index_task(self,
       text_embeddings_df.to_feather(img_cache_folder / 'text_embeddings_df')
     if listing_df is not None and not listing_df.empty:
       listing_df.to_feather(img_cache_folder / 'listing_df')
+
+    send_insert_failure_alert(
+      embedding_stats=stats or {},  # ensure stats is not None
+      task_id=self.request.id,
+      error_message=f"General Error: {error_message} (Timestamp: {datetime.now().strftime('%Y%m%d%H%M')})"
+    )
 
   finally:
     if datastore:

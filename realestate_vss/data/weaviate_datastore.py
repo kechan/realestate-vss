@@ -1014,7 +1014,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         if failed_count > 0:
           # Log details of first few failed objects (to avoid excessive logging)
           for failed_obj in failed_objects[:3]:  # Show first 3 failures
-            self.logger.error(f"Failed object example: {failed_obj}")
+            self.logger.error(f"Failed object example: {failed_obj.object_.properties.get('listing_id')}")
         
           if failed_count > 3:
             self.logger.error(f"... and {failed_count - 3} more failures")

@@ -6,8 +6,10 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 from celery.exceptions import SoftTimeLimitExceeded
 from pathlib import Path
+from dotenv import load_dotenv, find_dotenv
 
 import realestate_core.common.class_extensions
+from realestate_vss.utils.email import send_email_alert
 
 celery = Celery('delete_inactive_app', broker='pyamqp://guest@localhost//')
 
@@ -54,24 +56,38 @@ DELETE_LOG_FILE = 'celery_delete_inactive.run_log.csv'
 SHARD_FILE_PREFIX = 'listings_to_be_deleted'   # fiels that store the list of listings to be deleted
 MAX_LISTINGS_PER_SESSION = 1000
 
+
 def get_last_delete_time() -> Optional[datetime]:
   try:
     with open(LAST_RUN_FILE, 'r') as f:
       last_run_str = f.read().strip()
       return datetime.fromisoformat(last_run_str)
   except FileNotFoundError:
+    celery_logger.warning(f"{LAST_RUN_FILE} not found. Assuming no previous run.")
     return None
   except ValueError:
+    celery_logger.error(f"Invalid date format in {LAST_RUN_FILE}.")
+    return None
+  except OSError as e:
+    celery_logger.error(f"Error reading {LAST_RUN_FILE}: {str(e)}")
     return None
   
 def set_last_delete_time(a_datetime: datetime):
-  with open(LAST_RUN_FILE, 'w') as f:
-    f.write(a_datetime.isoformat())  
+  try:
+    with open(LAST_RUN_FILE, 'w') as f:
+      f.write(a_datetime.isoformat())
+  except OSError as e:
+    celery_logger.error(f"Error writing {LAST_RUN_FILE}: {str(e)}")
+    raise
+
 
 def log_delete_run(start_time: datetime, end_time: Optional[datetime], status: str, stats: Dict):
   import pandas as pd
-  
-  duration = (end_time - start_time).total_seconds()
+  try:
+    duration = (end_time - start_time).total_seconds()
+  except TypeError as e:
+    celery_logger.error(f"Invalid end_time provided: {str(e)}")
+    duration = None    # TODO: is this right thing to do?
   
   log_path = Path(DELETE_LOG_FILE)
   log_data = {
@@ -92,7 +108,7 @@ def log_delete_run(start_time: datetime, end_time: Optional[datetime], status: s
   
   updated_df.to_csv(log_path, index=False)    
 
-def retry_batch_delete(func, max_retries=3, *args, **kwargs) -> Tuple[int, Dict]:
+def retry_batch_delete(func, max_retries=3, *args, **kwargs) -> Tuple[int, List]:
   """
   Helper function to retry batch deletions.
   
@@ -107,7 +123,7 @@ def retry_batch_delete(func, max_retries=3, *args, **kwargs) -> Tuple[int, Dict]
   for attempt in range(max_retries):
     deletion_stats = func(*args, **kwargs)
     if deletion_stats.get('error_count', 0) == 0 and 'fatal_error' not in deletion_stats:
-      return deletion_stats['total_objects_deleted'], {}
+      return deletion_stats['total_objects_deleted'], []
     
     celery_logger.warning(
       f"Batch deletion attempt {attempt + 1} had {deletion_stats.get('error_count', 0)} failures, "
@@ -127,24 +143,112 @@ def get_shard_files(base_folder: Path) -> List[Path]:
 
 def save_shard_file(listing_ids: List[str], shard_path: Path):
   """Save listing IDs to a shard file"""
-  with open(shard_path, 'w') as f:
-    json.dump(listing_ids, f)
+  try:
+    with open(shard_path, 'w') as f:
+      json.dump(listing_ids, f)
+  except OSError as e:
+    celery_logger.error(f"Error writing shard file {shard_path}: {str(e)}")
+    raise
+  except TypeError as e:
+    celery_logger.error(f"Error serializing listing IDs for shard file {shard_path}: {str(e)}")
+    raise
 
 def load_shard_file(shard_path: Path) -> List[str]:
   """Load listing IDs from a shard file"""
-  with open(shard_path, 'r') as f:
-    return json.load(f)
+  try:
+    with open(shard_path, 'r') as f:
+      return json.load(f)
+  except FileNotFoundError:
+    celery_logger.error(f"Shard file {shard_path} not found")
+    raise
+  except json.JSONDecodeError as e:
+    celery_logger.error(f"Error decoding JSON from shard file {shard_path}: {str(e)}")
+    raise
+  except OSError as e:
+    celery_logger.error(f"Error reading shard file {shard_path}: {str(e)}")
+    raise
 
 
+# Email alert
+def send_deletion_failure_alert(failed_listings: List[str], 
+                             deletion_stats: Dict[str, int],
+                             task_id: str,
+                             error_message: Optional[str] = None):
+  """
+  Send an email alert for failed listing deletions.
 
-@celery.task(bind=True, max_retries=3, acks_late=False, track_started=True)
+  Args:
+    failed_listings: List of listing IDs that failed to delete
+    deletion_stats: Dictionary containing deletion statistics
+    task_id: The Celery task ID
+    error_message: Optional error message/exception to include in the alert
+  """
+  try:
+    _ = load_dotenv(find_dotenv())
+
+    sender_email = os.getenv('VSS_SENDER_EMAIL')
+    receiver_emails = os.getenv('VSS_RECEIVER_EMAILS', '')
+    if receiver_emails:
+      receiver_emails = receiver_emails.split(',')
+    email_password = os.getenv('VSS_EMAIL_PASSWORD')
+
+    if not all([sender_email, email_password, receiver_emails]):
+      celery_logger.error("Email credentials or receivers not found in environment variables. Email alert will not be sent.")
+      return
+    
+    if not failed_listings:
+      failed_listings = []
+
+    subject = f"VSS Deletion Task Failure Alert - Task ID: {task_id}"
+
+    failed_listings_preview = failed_listings[:10]
+    remaining_failed_count = len(failed_listings) - 10 if len(failed_listings) > 10 else 0
+    
+    html_content = f"""
+    <html>
+    <body>
+      <h2>VSS Deletion Task Failure Alert</h2>
+      <p>Task ID: {task_id}</p>
+      <p>Status: <span style="color:red">FAILED</span></p>
+
+      {f'<p>Error: <span style="color:red">{error_message}</span></p>' if error_message else ''}      
+      
+      <h3>Deletion Statistics:</h3>
+      <ul>
+        <li>Total Listings Processed: {deletion_stats.get('total_listings_deleted', 0)}</li>
+        <li>Total Embeddings Deleted: {deletion_stats.get('total_embeddings_deleted', 0)}</li>
+        <li>Failed Deletions: {len(failed_listings)}</li>
+      </ul>
+      
+      <h3>Failed Listings (first 10):</h3>
+      <ul>
+        {"".join([f"<li>{listing_id}</li>" for listing_id in failed_listings_preview])}
+      </ul>    
+    """
+
+    if remaining_failed_count > 0:
+      html_content += f"<p>And {remaining_failed_count} more...</p>"
+
+    html_content += """
+      <p>Please check the logs for more details.</p>
+    </body>
+    </html>
+    """
+    
+    send_email_alert(subject, html_content, sender_email, receiver_emails, email_password)
+  except Exception as e:
+    celery_logger.error(f"Failed to send deletion failure alert: {str(e)}")
+
+
+# @celery.task(bind=True, max_retries=3, acks_late=False, track_started=True)
+@celery.task(bind=True, max_retries=3, track_started=True)
 def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sleep=0.5):
   """
   Task to delete inactive, delisted, or sold listings from Weaviate based on BigQuery data.
   
   Args:
     batch_size: Number of listings to delete in each batch
-    sleep_time: Sleep time between batches in seconds
+    sleep: Sleep time between batches in seconds
   """
   
    # Lazy imports
@@ -167,7 +271,8 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
 
   try:
     _ = load_dotenv(find_dotenv())
-    if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
+    use_weaviate = os.getenv("USE_WEAVIATE")
+    if not (use_weaviate and use_weaviate.lower() == 'true'):
       raise ValueError("USE_WEAVIATE not set to 'true' in .env")
     
     # Initialize Weaviate client
@@ -207,7 +312,13 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
         break
 
       oldest_shard = shard_files[0]
-      listing_ids = load_shard_file(oldest_shard)
+      try:
+        listing_ids = load_shard_file(oldest_shard)
+      except Exception as e:
+        celery_logger.error(f"Error loading shard {oldest_shard}: {str(e)}, skipping due to error.")
+        oldest_shard.unlink(missing_ok=True)   # remove bad (likely corrupted) shard
+        continue # proceed to next shard
+
       celery_logger.info(f'Processing shard {oldest_shard.name} with {len(listing_ids)} listings')
 
       embeddings_deleted, failed_batches = retry_batch_delete(
@@ -224,8 +335,16 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
           failed_listing_ids.update(batch['listing_ids'])
         stats['failed_listings'] = list(failed_listing_ids)
 
-        error_message = f"Failed to delete {len(failed_listing_ids)} listings after retries"
+        error_message = f"Failed to delete {len(failed_listing_ids)} listings after retries (Shard: {oldest_shard.name})"
         celery_logger.error(error_message)
+
+        # Send email alert for deletion failures
+        send_deletion_failure_alert(
+          failed_listings=list(failed_listing_ids),
+          deletion_stats=stats,
+          task_id=self.request.id,
+          error_message=error_message
+        )
 
         # If we have task-level retries left, retry the whole task
         if self.request.retries < self.max_retries:
@@ -273,17 +392,37 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
 
   except SoftTimeLimitExceeded:
     celery_logger.warning("Task approaching time limit, attempting graceful shutdown")
-    error_message = "Soft time limit exceeded (55 minutes)"
+    error_message = f"Soft time limit exceeded (55 minutes) - Last processed shard: {oldest_shard.name if 'oldest_shard' in locals() else 'None'}"
+
     task_status = 'Failed'
+
+    send_deletion_failure_alert(
+      failed_listings=stats.get('failed_listings', []),
+      deletion_stats=stats,
+      task_id=self.request.id,
+      error_message=error_message
+    )
+
     raise
 
   except Exception as e:
     celery_logger.error(f"Error: {str(e)}")
-    error_message = str(e)
+    error_message = f"General Error: {str(e)} - Last processed shard: {oldest_shard.name if 'oldest_shard' in locals() else 'None'}"
+  
     task_status = 'Failed'
+
+    send_deletion_failure_alert(
+      failed_listings=stats.get('failed_listings', []),
+      deletion_stats=stats,
+      task_id=self.request.id,
+      error_message=f"General Error: {error_message}"      
+    )
+
     raise
 
   finally:
+    task_end_time = datetime.now()
+
     if datastore:
       datastore.close()
     if bq_datastore:
@@ -291,7 +430,6 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
 
     gc.collect()
 
-    task_end_time = datetime.now()
     log_delete_run(task_start_time, task_end_time, task_status, stats)
 
     if task_status == "Completed":
