@@ -954,7 +954,6 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
     return total_imported
 
-
   @retry(**RETRY_SETTINGS)
   def batch_insert(self, listings: Iterable[Dict], embedding_type: str = 'I', batch_size=1000, sleep_time=1) -> Dict[str, List[Dict]]:
     """
@@ -982,24 +981,19 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     all_failed_objects = []
 
     try:
-      for batch_listings in chunks(list(listings), batch_size):
+      for batch_listings in chunks(list(listings), batch_size):        
         with collection.batch.dynamic() as batch:
           for listing_json in tqdm(batch_listings):
+            listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
+            key = self._create_key(listing_json, embedding_type)
+            vector = listing_json.pop('embedding')
 
-            try:
-              listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
-              key = self._create_key(listing_json, embedding_type)
-              vector = listing_json.pop('embedding')
-
-              batch.add_object(
-                properties=listing_json,
-                uuid=key,
-                vector=vector
-              )
-              total_processed += 1
-            except Exception as e:
-              self.logger.error(f"Error adding object to batch: {str(e)}")
-              continue
+            batch.add_object(
+              properties=listing_json,
+              uuid=key,
+              vector=vector
+            )
+            total_processed += 1
 
         # After the batch is processed, check for failed objects
         failed_objects = collection.batch.failed_objects

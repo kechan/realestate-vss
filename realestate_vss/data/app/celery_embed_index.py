@@ -36,7 +36,13 @@ DELETE_INCOMING_TEXT_EMBEDDINGS_SLEEP_TIME = 0.5
 # DELETE_BQ_LISTINGS_SLEEP_TIME = 0.5
 BATCH_INSERT_SLEEP_TIME = 3
 
+_ = load_dotenv(find_dotenv())
 celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
+if os.getenv('CELERY_ENABLE_RESULT_BACKEND', 'false').lower() == 'true':
+  celery.conf.result_backend = 'redis://127.0.0.1:6379/1'
+  celery.conf.result_expires = 86400  # 1 day = 86400 seconds
+
+celery.conf.result_expires = 86400  # 1 day = 86400 seconds
 # celery.conf.worker_cancel_long_running_tasks_on_connection_loss = True
 
 # Set log level for the Celery app

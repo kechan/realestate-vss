@@ -274,9 +274,9 @@ async def delete_inactive(batch_size: int = Query(20), sleep_time: float = Query
   })
 
 
-@app.get("/task_status/{task_id}")
-async def get_task_status(task_id: str):
-  task_result = AsyncResult(task_id)
+@app.get("/embed_and_index_task_status/{task_id}")
+async def get_embed_and_index_task_status(task_id: str):
+  task_result = embed_and_index_task.AsyncResult(task_id)
   response = {
       "task_id": task_id,
       "status": task_result.status,
@@ -284,6 +284,15 @@ async def get_task_status(task_id: str):
   }
   return JSONResponse(content=response)
 
+@app.get("/delete_inactive_listings_task_status/{task_id}")
+async def get_delete_inactive_listings_task_status(task_id: str):
+  task_result = delete_inactive_listings_task.AsyncResult(task_id)
+  response = {
+      "task_id": task_id,
+      "status": task_result.status,
+      "result": task_result.result if task_result.ready() else None
+  }
+  return JSONResponse(content=response)
 
 # Add the new endpoint
 @app.get("/delete_old_unsync")
