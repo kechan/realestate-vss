@@ -908,6 +908,12 @@ def embed_and_index_task(self,
               "end_time": task_end_time.strftime("%Y-%m-%d %H:%M:%S")
               }
     else:
+      send_insert_failure_alert(
+        embedding_stats={},
+        task_id=self.request.id,
+        error_message="Unknown, please check logs or other email alerts",
+        embedding_type='unknown'
+      )
       return {"status": "Failed", 
               "error": error_message,
               "start_time": task_start_time.strftime("%Y-%m-%d %H:%M:%S"),

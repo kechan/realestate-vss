@@ -446,6 +446,12 @@ def delete_inactive_listings_task(self, img_cache_folder: str, batch_size=20, sl
         "end_time": task_end_time.strftime("%Y-%m-%d %H:%M:%S")
       }
     else:
+      send_deletion_failure_alert(
+        failed_listings=[],
+        deletion_stats={},
+        task_id=self.request.id,
+        error_message="Unknown, please check logs or other email alerts"
+      )
       return {
         "status": "Failed",
         "error": error_message,
