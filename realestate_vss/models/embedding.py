@@ -28,6 +28,11 @@ from realestate_spam.models.embedding import EmbeddingModel, InstructorEmbedding
 from realestate_vision.common.utils import get_listingId_from_image_name
 
 NON_BLOCKING = False
+FILTER_CHUNKS = {
+  '*', '**', '***', '•', '+', '.', '-', '!!', '!',
+  '>', '<', '=', '/', '\\', '|', '_', '#', '@'
+}
+
 
 class ListingImageDataset(Dataset):
   def __init__(self, image_paths: List[Path], transform):
@@ -115,6 +120,8 @@ class ListingTextDataset(Dataset):
       # Generate chunk IDs
       data = []
       for sent_idx, sentence in enumerate(sentences):
+        if sentence in FILTER_CHUNKS or not sentence:
+          continue
         remark_chunk_id = f"{jumpId}_{sent_idx}"
         data.append({
           'jumpId': jumpId,
@@ -360,6 +367,8 @@ class OpenClipTextEmbeddingModel(OpenClipEmbeddingModel):
 
           # Iterate through each sentence and prepare batch lists
           for sent_idx, (sentence, start, end) in enumerate(sentences):
+              if sentence in FILTER_CHUNKS or not sentence:
+                continue
               remark_chunk_id = f"{jump_id}_{sent_idx}"
 
               sentence_batch.append(sentence)
@@ -643,6 +652,8 @@ class HFClipTextEmbeddingModel(HFCLIPModel):
             sentences = ['']
 
           for sent_idx, sentence in enumerate(sentences):
+            if sentence in FILTER_CHUNKS or not sentence:
+              continue
             remark_chunk_id = f"{jump_id}_{sent_idx}"
 
             sentence_batch.append(sentence)
