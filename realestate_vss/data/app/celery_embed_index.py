@@ -33,8 +33,8 @@ from dotenv import load_dotenv, find_dotenv
 
 DELETE_INCOMING_IMAGE_EMBEDDINGS_SLEEP_TIME = 0.5
 DELETE_INCOMING_TEXT_EMBEDDINGS_SLEEP_TIME = 0.5
-# DELETE_BQ_LISTINGS_SLEEP_TIME = 0.5
 BATCH_INSERT_SLEEP_TIME = 3
+MAX_LISTING_TO_EMBED_INDEX = 1000 
 
 _ = load_dotenv(find_dotenv())
 celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
@@ -635,8 +635,13 @@ def embed_and_index_task(self,
     
     if image_embeddings_df is None:
       # Resolve listings to be processed    
-      listing_folders = img_cache_folder.lfre(r'^\d+$')      
+      listing_folders = img_cache_folder.lfre(r'^\d+$')
       celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
+
+      if len(listing_folders) > MAX_LISTING_TO_EMBED_INDEX:
+        celery_logger.info(f'Limiting number of listing folders from {len(listing_folders)} to {MAX_LISTING_TO_EMBED_INDEX}')
+        listing_folders = listing_folders[:MAX_LISTING_TO_EMBED_INDEX]
+
       if len(listing_folders) == 0:
         celery_logger.info('No listings found. Exiting...')
         task_status = "Completed"
@@ -813,7 +818,7 @@ def embed_and_index_task(self,
     stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]
     # stats["total_listings_deleted"] += stats["image_listings_deleted"] + stats["text_listings_deleted"]
 
-    # TODO: consider commeting these out when deployed
+    # TODO: consider commenting these out when deployed
     # Backup
     backup(
       backup_folder=img_cache_folder/'backup',
@@ -839,19 +844,19 @@ def embed_and_index_task(self,
     error_message = str(e)
     
     # if there's an error, try save the embeddings and listing_df
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    timestamp = datetime.now().strftime("%Y%m%d%H%M")
 
     if image_embeddings_df is not None and not image_embeddings_df.empty:
-      image_embeddings_df.to_feather(img_cache_folder / 'image_embeddings_df')
+      image_embeddings_df.to_feather(img_cache_folder / f'image_embeddings_df.{timestamp}')
     if text_embeddings_df is not None and not text_embeddings_df.empty:
-      text_embeddings_df.to_feather(img_cache_folder / 'text_embeddings_df')
+      text_embeddings_df.to_feather(img_cache_folder / f'text_embeddings_df.{timestamp}')
     if listing_df is not None and not listing_df.empty:
-      listing_df.to_feather(img_cache_folder / 'listing_df')
+      listing_df.to_feather(img_cache_folder / f'listing_df.{timestamp}')
 
     send_insert_failure_alert(
       embedding_stats=stats or {},  # ensure stats is not None
       task_id=self.request.id,
-      error_message=f"General Error: {error_message} (Timestamp: {datetime.now().strftime('%Y%m%d%H%M')})"
+      error_message=f"General Error: {error_message} (Timestamp: {timestamp})"
     )
 
   finally:

@@ -7,6 +7,11 @@ from datetime import datetime
 import uvicorn
 
 import pandas as pd
+
+import weaviate
+from weaviate.classes.init import AdditionalConfig, Timeout
+from realestate_vss.data.weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
+
 from dotenv import load_dotenv, find_dotenv
 
 from celery.result import AsyncResult
@@ -146,6 +151,38 @@ else:
 @app.get("/")
 async def root():
   return PlainTextResponse("ok")
+
+@app.get("/weaviate/count")
+async def get_weaviate_doc_count():
+  load_dotenv(find_dotenv())
+  
+  WEAVIATE_HOST = os.getenv("WEAVIATE_HOST")
+  WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT")) if os.getenv("WEAVIATE_PORT") is not None else None
+  WCS_URL = os.getenv("WCS_URL")
+  WCS_API_KEY = os.getenv("WCS_API_KEY")
+  
+  if WEAVIATE_HOST and WEAVIATE_PORT:
+    client = weaviate.connect_to_local(
+        host=WEAVIATE_HOST, 
+        port=WEAVIATE_PORT
+    )
+  elif WCS_URL and WCS_API_KEY:
+    client = weaviate.connect_to_wcs(
+        cluster_url=WCS_URL,
+        auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
+    )
+  else:
+    raise HTTPException(status_code=500, detail="Weaviate configuration not found")
+
+  datastore = WeaviateDataStore(client=client, image_embedder=None, text_embedder=None)
+  
+  try:
+      count = datastore.count_all()
+      return JSONResponse(content={"total_docs": count})
+  except Exception as e:
+      raise HTTPException(status_code=500, detail=str(e))
+  finally:
+      datastore.close()
 
 # Endpoint for submitting images and metadata
 @app.post("/submit/")

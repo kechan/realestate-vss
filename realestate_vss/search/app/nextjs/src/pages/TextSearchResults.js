@@ -41,10 +41,14 @@ export default function TextSearchResults({ searchResults }) {
       {
         Header: 'Remarks',
         accessor: 'remarks',
-        Cell: ({ value }) => (
-          <div className={styles['listing-remarks']}>{value}</div>
+        Cell: ({ row, value }) => (
+          <div className={styles['listing-remarks']}>
+            <HighlightedRemarks 
+              remarks={value}
+              chunkPositions={row.original.remark_chunk_pos || []}
+            />
+          </div>
         ),
-        // headerClassName: styles['header-remarks'],
       }
       
     ],

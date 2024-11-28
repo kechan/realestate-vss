@@ -3,11 +3,50 @@ import Link from 'next/link';
 import searchStyles from '../styles/SearchResults.module.css';
 import imageSearchstyles from '../styles/ImageSearchResults.module.css';
 
+const HighlightedRemarks = ({ remarks, chunkPositions }) => {
+  if (!chunkPositions || chunkPositions.length === 0) {
+    return <span>{remarks}</span>;
+  }
+
+  let lastIndex = 0;
+  const parts = [];
+
+  chunkPositions.forEach(([start, end], index) => {
+    // Add non-highlighted text before the highlight
+    if (start > lastIndex) {
+      parts.push(
+        <span key={`text-${index}`}>
+          {remarks.substring(lastIndex, start)}
+        </span>
+      );
+    }
+    // Add highlighted text
+    parts.push(
+      <span key={`highlight-${index}`} style={{ backgroundColor: '#ffeb3b' }}>
+        {remarks.substring(start, end)}
+      </span>
+    );
+    lastIndex = end;
+  });
+
+  // Add any remaining text after the last highlight
+  if (lastIndex < remarks.length) {
+    parts.push(
+      <span key="text-end">
+        {remarks.substring(lastIndex)}
+      </span>
+    );
+  }
+
+  return <>{parts}</>;
+};
+
 export default function ImageSearchResults({ searchResults }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [remarksModalVisible, setRemarksModalVisible] = useState(false);
   const [selectedRemarks, setSelectedRemarks] = useState(null);
+  const [selectedListing, setSelectedListing] = useState(null);
   // const [remarks, setRemarks] = useState('');
   const modalRef = useRef();
 
@@ -25,12 +64,13 @@ export default function ImageSearchResults({ searchResults }) {
   //   setRemarksModalVisible(true);
   // };
 
-  const openRemarksModal = async (listingId, existingRemarks) => {
+  const openRemarksModal = async (listingId, existingRemarks, listing) => {
     if (!existingRemarks) {
       await fetchRemarks(listingId);
     } else {
       setSelectedRemarks(existingRemarks);
     }
+    setSelectedListing(listing);
     setRemarksModalVisible(true);
   };
 
@@ -104,11 +144,14 @@ export default function ImageSearchResults({ searchResults }) {
               </div>
             </div>
             {listing.remarks ? (            
-              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.listingId, listing.remarks)}>
-                {listing.remarks.length > 100 ? listing.remarks.substring(0, 100) + '...' : listing.remarks}
+              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.listingId, listing.remarks, listing)}>
+                <HighlightedRemarks 
+                  remarks={listing.remarks}
+                  chunkPositions={listing.remark_chunk_pos || []}
+                />
               </div>
             ) : (
-              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.listingId, listing.remarks)}>
+              <div className={imageSearchstyles['listing-remarks']} onClick={() => openRemarksModal(listing.listingId, listing.remarks, listing)}>
                 See remarks
               </div>
 
@@ -130,7 +173,12 @@ export default function ImageSearchResults({ searchResults }) {
         <div className={imageSearchstyles.modal} onClick={closeRemarksModal}>
           <div className={imageSearchstyles.modalWrapper} onClick={(e) => e.stopPropagation()}>
             <div className={imageSearchstyles.modalContent}>
-              <p className={imageSearchstyles.modalRemarks}>{selectedRemarks}</p>
+              <p className={imageSearchstyles.modalRemarks}>
+                <HighlightedRemarks 
+                  remarks={selectedRemarks}
+                  chunkPositions={selectedListing?.remark_chunk_pos || []}
+                />
+              </p>
               <span className={imageSearchstyles.close} onClick={closeRemarksModal}>&times;</span>
             </div>
           </div>
