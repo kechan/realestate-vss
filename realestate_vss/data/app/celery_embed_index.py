@@ -20,8 +20,6 @@ from realestate_vss.data.es_client import ESClient
 import realestate_core.common.class_extensions
 from realestate_core.common.utils import join_df, flatten_list, save_to_pickle, load_from_pickle
 
-from realestate_analytics.data.bq import BigQueryDatastore
-
 # from elasticsearch import Elasticsearch
 # from elasticsearch.exceptions import NotFoundError
 # from elasticsearch.helpers import scan
@@ -31,8 +29,6 @@ from realestate_analytics.data.bq import BigQueryDatastore
 
 from dotenv import load_dotenv, find_dotenv
 
-DELETE_INCOMING_IMAGE_EMBEDDINGS_SLEEP_TIME = 0.5
-DELETE_INCOMING_TEXT_EMBEDDINGS_SLEEP_TIME = 0.5
 BATCH_INSERT_SLEEP_TIME = 3
 MAX_LISTING_TO_EMBED_INDEX = 1000 
 
@@ -509,10 +505,29 @@ def embed_and_index_task(self,
                         es_fields: List[str], 
                         image_batch_size: int, 
                         text_batch_size: int, 
-                        num_workers: int, 
-                        delete_incoming=False
+                        num_workers: int
                         ):
-
+  """
+    Performs image and text embedding on listing data and indexes them into Weaviate.
+    
+    Args:
+        img_cache_folder: Path to folder containing listing images and data
+        es_fields: List of fields to retrieve from Elasticsearch 
+        image_batch_size: Batch size for image embedding
+        text_batch_size: Batch size for text embedding
+        num_workers: Number of worker processes for data loading
+    
+    The task:
+    1. Processes any unsynced image embeddings from previous runs
+    2. Embeds images from listing folders
+    3. Retrieves listing data from Elasticsearch
+    4. Generates text embeddings from listing descriptions
+    5. Indexes both image and text embeddings into Weaviate
+    6. Backs up processed data and cleans up temporary files
+    
+    Returns:
+        Dict with status, statistics and timing information
+  """
   global device, image_embedding_model, text_embedding_model
   if device is None:
     device = torch.device('cuda') if torch.cuda.is_available() else \
@@ -539,12 +554,8 @@ def embed_and_index_task(self,
   stats = {
     "total_listings_processed": 0,
     "image_embeddings_inserted": 0,
-    "image_listings_deleted": 0,
     "text_embeddings_inserted": 0,
-    "text_listings_deleted": 0,
-    "total_embeddings_inserted": 0,
-    # "total_listings_deleted": 0,
-    # "total_embeddings_deleted": 0
+    "total_embeddings_inserted": 0
   }
 
   # Gather environment variables for Weaviate and Elasticsearch
@@ -622,14 +633,7 @@ def embed_and_index_task(self,
     celery_logger.info(f"Unsynced processing stats: {unsync_stats}")
 
     # check for existing embedding files (if last run has exceptions and failed to complete)
-    # image_embeddings_file = img_cache_folder / 'image_embeddings_df'
-    # text_embeddings_file = img_cache_folder / 'text_embeddings_df'
-    # listing_df_file = img_cache_folder / 'listing_df'
     listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
-
-    # used to mark delete for incoming image listings
-    image_delete_marker = img_cache_folder / 'image_delete_completed'
-    text_delete_marker = img_cache_folder / 'text_delete_completed'
 
     image_embeddings_df, image_embeddings_file_used = load_image_embeddings(img_cache_folder, celery_logger)
     
@@ -697,20 +701,6 @@ def embed_and_index_task(self,
     # Process image embeddings
     # Delete incoming image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listings and {image_embeddings_df.shape[0]} image embeddings')
-    if delete_incoming and last_run is not None and not image_delete_marker.exists():
-      celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
-      # datastore.delete_listings(listing_ids=incoming_image_listingIds, embedding_type='I')
-      datastore.delete_listings_by_batch(listing_ids=list(incoming_image_listingIds), 
-                                         embedding_type='I', 
-                                         batch_size=10, 
-                                         sleep_time=DELETE_INCOMING_IMAGE_EMBEDDINGS_SLEEP_TIME)
-      celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
-
-      stats["image_listings_deleted"] = len(incoming_image_listingIds)
-      image_delete_marker.touch()
-    else:
-      celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
-    
     
     # Embed Image and Text
     if len(listing_df) == 0:
@@ -757,19 +747,6 @@ def embed_and_index_task(self,
       # Process text embeddings
       # Delete incoming text embeddings
       celery_logger.info(f'Processing {len(incoming_text_listingIds)} listings and {text_embeddings_df.shape[0]} text embeddings')
-      if delete_incoming and last_run is not None and not text_delete_marker.exists():
-        celery_logger.info(f'Begin deleting incoming listing IDs before batch_insert')
-        # datastore.delete_listings(listing_ids=incoming_text_listingIds, embedding_type='T')
-        datastore.delete_listings_by_batch(listing_ids=list(incoming_text_listingIds), 
-                                          embedding_type='T', 
-                                          batch_size=10, 
-                                          sleep_time=DELETE_INCOMING_TEXT_EMBEDDINGS_SLEEP_TIME)
-        celery_logger.info(f'Ended deleting incoming listing IDs before batch_insert')
-
-        stats["text_listings_deleted"] = len(incoming_text_listingIds)
-        text_delete_marker.touch()
-      else:
-        celery_logger.info(f'Skipping deletion of incoming listing IDs (first run or intentional skip)')
 
       # Insert incoming text embeddings
       celery_logger.info("Begin batch insert text embeddings to weaviate")
@@ -798,16 +775,13 @@ def embed_and_index_task(self,
    
     set_last_run_time(task_start_time)
 
-    # delete all processed listing folders
-    
-    # processed_listing_ids = incoming_image_listingIds.union(incoming_text_listingIds)
+    # Delete all processed listing folders
     if listing_folders is not None:
       celery_logger.info(f'Deleting all processed {len(listing_folders)} listing folders')
       for listing_folder in listing_folders:
         # listing_folder_path = img_cache_folder / str(listing_id)
         try:
           shutil.rmtree(listing_folder)    
-          # shutil.move(listing_folder_path, img_cache_folder/'done')   # TODO: for dev temporarily
         except Exception as e:
           celery_logger.warning(f'Unable to remove {listing_folder}')
       celery_logger.info(f'Deleted all processed {len(listing_folders)} listing folders')
@@ -816,7 +790,6 @@ def embed_and_index_task(self,
 
     # Calculate total statistics
     stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]
-    # stats["total_listings_deleted"] += stats["image_listings_deleted"] + stats["text_listings_deleted"]
 
     # TODO: consider commenting these out when deployed
     # Backup
@@ -828,14 +801,6 @@ def embed_and_index_task(self,
       compression='zstd',
       compression_level=3
     )
-
-    # timestamp = datetime.now().strftime("%Y%m%d%H%M")
-    # if image_embeddings_df is not None and not image_embeddings_df.empty:
-    #   image_embeddings_df.to_feather(backup_folder/f'image_embeddings_df.{timestamp}')
-    # if text_embeddings_df is not None and not text_embeddings_df.empty:
-    #   text_embeddings_df.to_feather(backup_folder/f'text_embeddings_df.{timestamp}')
-    # if listing_df is not None and not listing_df.empty:
-    #   listing_df.to_feather(backup_folder/f'listing_df.{timestamp}')
 
     task_status = "Completed"
 
@@ -865,12 +830,6 @@ def embed_and_index_task(self,
     if 'es' in locals() and es is not None:
       es.close()
 
-    # if 'bq_datastore' in locals() and bq_datastore is not None:
-    #   try:
-    #     bq_datastore.close()
-    #   except Exception as e:
-    #     pass
-
     del image_embeddings_df
     del text_embeddings_df
     gc.collect()
@@ -894,8 +853,6 @@ def embed_and_index_task(self,
         image_embeddings_file_used,
         text_embeddings_file_used,
         listing_df_file_used,
-        image_delete_marker,
-        text_delete_marker,
         listing_folders_pickle_file
       ] if f is not None]
 

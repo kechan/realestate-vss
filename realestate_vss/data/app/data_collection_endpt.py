@@ -268,13 +268,13 @@ async def update_vec_index():
 '''
 
 @app.get("/embed_and_index")
-async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4), delete_incoming: bool = Query(False)):
+async def embed_and_index(image_batch_size: int = Query(32), text_batch_size: int = Query(128), num_workers: int = Query(4)):
   task = embed_and_index_task.apply_async(args=[str(img_cache_folder), 
                                                 listing_fields, 
                                                 image_batch_size, 
                                                 text_batch_size, 
-                                                num_workers,
-                                                delete_incoming], queue='embed_index_queue')
+                                                num_workers
+                                                ], queue='embed_index_queue')
   
   return JSONResponse(content={"message": "Embedding and indexing task started.", "task_id": task.id})
 
