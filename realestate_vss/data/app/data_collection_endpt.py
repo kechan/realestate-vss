@@ -78,17 +78,17 @@ class UnsyncFileManager:
     
     return expired_files
 
-  def cleanup_expired_files(self, dry_run: bool = True) -> List[Dict]:
+  def cleanup_expired_files(self) -> List[Dict]:
     """
     Wrapper method that ensures ES client cleanup.
     """
     try:
-      return self._do_cleanup(dry_run)
+      return self._do_cleanup()
     finally:
       if hasattr(self, 'es_client'):
         self.es_client.close()
 
-  def _do_cleanup(self, dry_run: bool = True) -> List[Dict]:
+  def _do_cleanup(self) -> List[Dict]:
     """
     Main cleanup implementation
     
@@ -110,8 +110,7 @@ class UnsyncFileManager:
           size_mb = file_path.stat().st_size / (1024 * 1024)
           age_days = (datetime.now() - timestamp).days
           
-          if not dry_run:
-            file_path.unlink()
+          file_path.unlink()
           
           results.append({
             'filename': file_path.name,
@@ -119,7 +118,7 @@ class UnsyncFileManager:
             'size_mb': round(size_mb, 2),
             'total_listings': len(unique_listings),
             'listings': unique_listings,
-            'action': 'deleted' if not dry_run else 'would_delete',
+            'action': 'deleted',
             'reason': f"Age: {age_days} days, no listings found in ES"
           })
         else:
@@ -333,7 +332,7 @@ async def get_delete_inactive_listings_task_status(task_id: str):
 
 # Add the new endpoint
 @app.get("/delete_old_unsync")
-async def delete_old_unsync(dry_run: bool = Query(True), expiration_days: int = Query(30)):
+async def delete_old_unsync(expiration_days: int = Query(30)):
   """
   Endpoint to cleanup old unsync files.
   
@@ -366,12 +365,11 @@ async def delete_old_unsync(dry_run: bool = Query(True), expiration_days: int = 
       expiration_days=expiration_days
     )
     
-    results = manager.cleanup_expired_files(dry_run=dry_run)
+    results = manager.cleanup_expired_files()
     
     # Summarize results
     summary = {
       'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-      'dry_run': dry_run,
       'expiration_days': expiration_days,
       'total_files_processed': len(results),
       'files_to_delete': len([r for r in results if r['action'] in ('deleted', 'would_delete')]),
