@@ -32,10 +32,10 @@ from dotenv import load_dotenv, find_dotenv
 BATCH_INSERT_SLEEP_TIME = 3
 MAX_LISTING_TO_EMBED_INDEX = 1000 
 
+_ = load_dotenv(find_dotenv())
 # Get Redis host (for result backend) from .env or fall back to 127.0.0.1
 REDIS_HOST = os.getenv('CELERY_BACKEND_REDIS_HOST_IP', '127.0.0.1')
 
-_ = load_dotenv(find_dotenv())
 celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
 if os.getenv('CELERY_ENABLE_RESULT_BACKEND', 'false').lower() == 'true':
   celery.conf.result_backend = f'redis://{REDIS_HOST}:6379/1'
