@@ -30,6 +30,8 @@ class ListingReconciliation:
     Note: We only need to check Listing_Image since text embeddings are always
     generated based on the listings found in the image collection during the
     embed_and_index process.
+
+    It took about 8.5 minutes to return 58941 listings.
     """
     listing_ids = set()
     image_collection = self.datastore.client.collections.get("Listing_Image")

@@ -36,12 +36,13 @@ _ = load_dotenv(find_dotenv())
 # Get Redis host (for result backend) from .env or fall back to 127.0.0.1
 REDIS_HOST = os.getenv('CELERY_BACKEND_REDIS_HOST_IP', '127.0.0.1')
 
-celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
 if os.getenv('CELERY_ENABLE_RESULT_BACKEND', 'false').lower() == 'true':
-  celery.conf.result_backend = f'redis://{REDIS_HOST}:6379/1'
+  celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//', backend=f'redis://{REDIS_HOST}:6379/1')
+  # celery.conf.result_backend = f'redis://{REDIS_HOST}:6379/1'
   celery.conf.result_expires = 86400  # 1 day = 86400 seconds
-
-celery.conf.result_expires = 86400  # 1 day = 86400 seconds
+  celery.conf.task_track_started = True
+else:
+  celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
 # celery.conf.worker_cancel_long_running_tasks_on_connection_loss = True
 
 # Set log level for the Celery app
