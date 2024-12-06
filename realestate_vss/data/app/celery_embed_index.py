@@ -99,7 +99,7 @@ def set_last_run_time(a_datetime: datetime):
   with open(LAST_RUN_FILE, 'w') as f:
     f.write(a_datetime.isoformat())
 
-def log_run(start_time: datetime, end_time: Optional[datetime], status: str):
+def log_run(start_time: datetime, end_time: Optional[datetime], status: str, total_embedding_inserted: int):
   duration = (end_time - start_time).total_seconds()
 
   run_log_path = Path(RUN_LOG_FILE)
@@ -107,7 +107,8 @@ def log_run(start_time: datetime, end_time: Optional[datetime], status: str):
     'start_time': [start_time],
     'end_time': [end_time],
     'status': [status],
-    'duration': [duration]
+    'duration': [duration],
+    'total_embedding_inserted': [total_embedding_inserted]
   }
   run_df = pd.DataFrame(run_data)
   if run_log_path.exists():
@@ -290,7 +291,7 @@ def process_unsync_embedding_file(unsync_embedding_file: Path,
       )
       stats["newly_synced_images"] = total_items - failed_count
       if failed_count > 0:
-        celery_logger.error(f"Failed to insert {failed_count} image embeddings")
+        celery_logger.error(f"Failed to insert {failed_count} image embeddings (unsync)")
       celery_logger.info(f"Ended batch insert {total_items - failed_count} image embeddings to weaviate")
 
       # Generate and process text embeddings for the listings in listing_df
@@ -321,7 +322,7 @@ def process_unsync_embedding_file(unsync_embedding_file: Path,
         )
         stats['newly_synced_texts'] = total_items - failed_count
         if failed_count > 0:
-          celery_logger.error(f"Failed to insert {failed_count} text embeddings")
+          celery_logger.error(f"Failed to insert {failed_count} text embedding (unsync)")
         celery_logger.info(f"Ended batch insert {total_items - failed_count} text embeddings to weaviate")
     
     # Handle the unsync file based on results
@@ -641,6 +642,7 @@ def embed_and_index_task(self,
 
     image_embeddings_df, image_embeddings_file_used = load_image_embeddings(img_cache_folder, celery_logger)
     
+    # Obtain image embedding
     if image_embeddings_df is None:
       # Resolve listings to be processed    
       listing_folders = img_cache_folder.lfre(r'^\d+$')
@@ -669,6 +671,7 @@ def embed_and_index_task(self,
 
     text_embeddings_df, listing_df, text_embeddings_file_used, listing_df_file_used = load_text_embeddings(img_cache_folder, celery_logger)
     
+    # Obtain text embedding
     if text_embeddings_df is None or listing_df is None:
       # Generate embed text
       # Note: listing_folders must exist since image embedding run first and it is responsible for instantiing it and/or dumping this pickle
@@ -701,12 +704,12 @@ def embed_and_index_task(self,
     incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
 
     stats["total_listings_processed"] = len(incoming_image_listingIds.union(incoming_text_listingIds))
+    
+    weaviate_insertion_has_failed = False
 
-    # Process image embeddings
-    # Delete incoming image embeddings
+    # Batch insert image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listings and {image_embeddings_df.shape[0]} image embeddings')
     
-    # Embed Image and Text
     if len(listing_df) == 0:
       # just save the entire image_embeddings_df for later indexing
       ts = datetime.now().strftime("%Y%m%d%H%M")
@@ -736,6 +739,7 @@ def embed_and_index_task(self,
       )
       stats["image_embeddings_inserted"] = total_items - failed_count
       if failed_count > 0:
+        weaviate_insertion_has_failed = True
         timestamp = datetime.now().strftime("%Y%m%d%H%M")
         error_message = f"Failed to insert {failed_count} image embeddings (timestamp: {timestamp})"
         celery_logger.error(error_message)
@@ -765,6 +769,7 @@ def embed_and_index_task(self,
       )
       stats["text_embeddings_inserted"] = total_items - failed_count
       if failed_count > 0:
+        weaviate_insertion_has_failed = True
         timestamp = datetime.now().strftime("%Y%m%d%H%M")
         error_message = f"Failed to insert {failed_count} text embeddings (timestamp: {timestamp})"
         celery_logger.error(error_message)
@@ -806,7 +811,10 @@ def embed_and_index_task(self,
       compression_level=3
     )
 
-    task_status = "Completed"
+    if not weaviate_insertion_has_failed:
+      task_status = "Completed"
+    else:
+      task_status = "Failed"
 
   except Exception as e:
     celery_logger.error(f"Error: {str(e)}")
@@ -849,7 +857,7 @@ def embed_and_index_task(self,
     # TODO: consider log_run on every attempt.
     # don't log if there's no listing and the status is Failed, these are mostly likely rerun due to timeout with rabbitmq
     if not (task_status == "Failed" and error_message is None and listing_folders is not None and len(listing_folders) == 0):
-      log_run(task_start_time, task_end_time, task_status)
+      log_run(task_start_time, task_end_time, task_status, stats['total_embeddings_inserted'])
 
     if task_status == "Completed":
       # Remove the temporary files
