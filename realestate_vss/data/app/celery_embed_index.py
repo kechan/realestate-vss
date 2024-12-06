@@ -79,6 +79,18 @@ device = None
 image_embedding_model = None
 text_embedding_model = None
 
+class WeaviateInsertionError(Exception):
+  """
+  Custom exception for Weaviate insertion failures.
+  
+  Attributes:
+      message (str): Description of the error.
+  """
+  def __init__(self, message: str):
+    super().__init__(message)
+    self.message = message
+
+
 def get_last_run_time():
   try:
     with open(LAST_RUN_FILE, 'r') as f:
@@ -567,6 +579,8 @@ def embed_and_index_task(self,
   _ = load_dotenv(find_dotenv())
   task_start_time = datetime.now()
 
+  weaviate_insertion_has_failed = False   # this is empirically the most likely error to occur
+
   try:
     
     if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
@@ -704,8 +718,6 @@ def embed_and_index_task(self,
     incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
 
     stats["total_listings_processed"] = len(incoming_image_listingIds.union(incoming_text_listingIds))
-    
-    weaviate_insertion_has_failed = False
 
     # Batch insert image embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listings and {image_embeddings_df.shape[0]} image embeddings')
@@ -781,7 +793,9 @@ def embed_and_index_task(self,
         )
       celery_logger.info("Ended batch insert text embeddings to weaviate")
 
-   
+    if weaviate_insertion_has_failed:
+      raise WeaviateInsertionError("One or more embeddings failed to insert into Weaviate.")
+    
     set_last_run_time(task_start_time)
 
     # Delete all processed listing folders
@@ -795,7 +809,7 @@ def embed_and_index_task(self,
           celery_logger.warning(f'Unable to remove {listing_folder}')
       celery_logger.info(f'Deleted all processed {len(listing_folders)} listing folders')
     else:
-      celery_logger.warning('No listing folders to delete because listing_folders is None (please investigate)')
+      celery_logger.warning('No listing folders deletion happens, consider investigate if there are other problems.')
 
     # Calculate total statistics
     stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]
@@ -811,14 +825,14 @@ def embed_and_index_task(self,
       compression_level=3
     )
 
-    if not weaviate_insertion_has_failed:
-      task_status = "Completed"
-    else:
-      task_status = "Failed"
+    task_status = "Completed"
 
-  except Exception as e:
-    celery_logger.error(f"Error: {str(e)}")
+  except (Exception, WeaviateInsertionError) as e:
     error_message = str(e)
+    if isinstance(e, WeaviateInsertionError):
+      celery_logger.error(f"WeaviateInsertionError: {error_message}")
+    else:
+      celery_logger.error(f"Error: {error_message}")
     
     # if there's an error, try save the embeddings and listing_df
     timestamp = datetime.now().strftime("%Y%m%d%H%M")
@@ -835,6 +849,8 @@ def embed_and_index_task(self,
       task_id=self.request.id,
       error_message=f"General Error: {error_message} (Timestamp: {timestamp})"
     )
+
+    task_status = "Failed"
 
   finally:
     if datastore:
