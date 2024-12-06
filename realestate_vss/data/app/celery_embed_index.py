@@ -628,10 +628,11 @@ def embed_and_index_task(self,
     datastore = WeaviateDataStore(client=client, image_embedder=None, text_embedder=None)
     if not datastore.ping():
       celery_logger.info('Weaviate is not accessible. Exiting...')
+      error_message = "Weaviate is not accessible."
       send_insert_failure_alert(
         embedding_stats=stats,
         task_id=self.request.id,
-        error_message="Weaviate is not accessible.",
+        error_message=error_message,
         embedding_type='unknown'
       )
       return
@@ -639,10 +640,11 @@ def embed_and_index_task(self,
     es = ESClient(host=es_host, port=es_port, index_name=listing_index_name, fields=es_fields)
     if not es.ping():
       celery_logger.info('ES is not accessible. Exiting...')
+      error_message = "Elasticsearch is not accessible."
       send_insert_failure_alert(
           embedding_stats=stats,
           task_id=self.request.id,
-          error_message="Elasticsearch is not accessible.",
+          error_message=error_message,
           embedding_type='unknown'
       )
       return
@@ -799,6 +801,16 @@ def embed_and_index_task(self,
     set_last_run_time(task_start_time)
 
     # Delete all processed listing folders
+    if listing_folders is None:
+      # Try to load from pickle as a last resort
+      listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
+      if listing_folders_pickle_file.exists():
+        try:
+          listing_folders = load_from_pickle(listing_folders_pickle_file)
+          celery_logger.info(f'Loaded {len(listing_folders)} listing folders from pickle for deletion')
+        except Exception as e:
+          celery_logger.error(f'Failed to load listing folders from pickle: {str(e)}')
+
     if listing_folders is not None:
       celery_logger.info(f'Deleting all processed {len(listing_folders)} listing folders')
       for listing_folder in listing_folders:
@@ -901,7 +913,7 @@ def embed_and_index_task(self,
       send_insert_failure_alert(
         embedding_stats={},
         task_id=self.request.id,
-        error_message="Unknown, please check logs or other email alerts",
+        error_message=error_message or "Unknown, please check logs or other email alerts",
         embedding_type='unknown'
       )
       return {"status": "Failed", 
