@@ -35,7 +35,10 @@ celery -A celery_embed_index.celery worker \
   -Q embed_index_queue \
   --detach \
   --hostname=embed_index_worker@%h \
-  --max-tasks-per-child=1
+  --max-tasks-per-child=1 \
+  --time-limit=3600 \
+  --soft-time-limit=3300
+  
 
 echo "Starting delete_inactive worker..."
 celery -A celery_delete_inactive.celery worker \

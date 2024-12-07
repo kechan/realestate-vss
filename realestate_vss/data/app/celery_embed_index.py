@@ -56,12 +56,25 @@ celery.conf.update(
   worker_redirect_stdouts_level='INFO',  # Redirect stdout/stderr to Celery log at ERROR level
 
   # For connection handling
-  broker_connection_timeout=60,          # 60 seconds connection timeout
-  broker_heartbeat=120,                 # Heartbeat every 2 minutes
+  broker_connection_timeout=3600,          # 1 hour connection timeout
+  broker_heartbeat=60,                 # Heartbeat every 1 minutes
+  task_time_limit=3600,                  # 1 hr max task runtime
+  task_soft_time_limit=3540,             # 1 min before hard time limit
+  worker_prefetch_multiplier=1,
+  # broker_transport_options={
+  #     'socket_timeout': 60.0,           # Socket timeout 60 seconds
+  #     'socket_keepalive': True,         # Enable TCP keepalive
+  # },
+  worker_concurrency=1,                   # Single worker process
+  worker_max_tasks_per_child=1,
+
   broker_transport_options={
-      'socket_timeout': 60.0,           # Socket timeout 60 seconds
-      'socket_keepalive': True,         # Enable TCP keepalive
-  }
+      'retry_on_timeout': True,
+      'interval_start': 0,
+      'interval_step': 1,
+      'interval_max': 30,
+      'socket_keepalive': True,
+  },
 )
 
 celery_logger = get_task_logger(__name__)
@@ -89,6 +102,142 @@ class WeaviateInsertionError(Exception):
   def __init__(self, message: str):
     super().__init__(message)
     self.message = message
+
+class ConnectionError(Exception):
+  """Custom exception for connection failures for ES and Weaviate."""
+  pass
+
+class ConnectionManager:
+  def __init__(self):
+    self.logger = celery_logger
+    self.datastore = None
+    self.es_client = None
+
+  def init_conns(self, es_fields: list) -> Tuple[WeaviateDataStore, ESClient]:
+    """
+    Initialize connections to both Weaviate and Elasticsearch.
+    
+    Args:
+      es_fields: List of fields to retrieve from Elasticsearch
+      
+    Returns:
+      Tuple of (WeaviateDataStore, ESClient)
+      
+    Raises:
+      ConnectionError: If either connection fails
+    """
+    try:
+      # Initialize Weaviate connection
+      if not os.getenv("USE_WEAVIATE", "").lower() == 'true':
+        raise ConnectionError("USE_WEAVIATE not set to 'true' in .env, this task requires Weaviate")
+
+      weaviate_client = self._setup_weaviate_connection()
+      self.datastore = WeaviateDataStore(
+        client=weaviate_client, 
+        image_embedder=None, 
+        text_embedder=None
+      )
+
+      if not self.datastore.ping():
+        raise ConnectionError("Weaviate is not accessible.")
+
+      # Initialize Elasticsearch connection
+      es_config = self._get_es_config()
+      self.es_client = ESClient(
+        host=es_config['host'],
+        port=es_config['port'],
+        index_name=es_config['index'],
+        fields=es_fields
+      )
+
+      if not self.es_client.ping():
+        raise ConnectionError("Elasticsearch is not accessible.")
+
+      return self.datastore, self.es_client
+
+    except Exception as e:
+      error_msg = f"Connection initialization failed: {str(e)}"
+      if "Meta endpoint!" in error_msg:
+        error_msg += " Check if the Weaviate cluster is running and accessible."
+      self.logger.error(error_msg)
+      self._cleanup_connections()
+      raise ConnectionError(error_msg)
+
+  def _setup_weaviate_connection(self) -> weaviate.Client:
+    """Set up and return Weaviate client based on environment configuration"""
+    weaviate_host = os.getenv("WEAVIATE_HOST")
+    weaviate_port = int(os.getenv("WEAVIATE_PORT")) if os.getenv("WEAVIATE_PORT") else None
+
+    if weaviate_host and weaviate_port:
+      self.logger.info(f'Using local Weaviate: {weaviate_host}:{weaviate_port}')
+      return weaviate.connect_to_local(
+        host=weaviate_host,
+        port=weaviate_port,
+        additional_config=AdditionalConfig(
+          timeout=Timeout(init=30, query=60, insert=120)
+        )
+      )
+    else:
+      wcs_url = os.getenv("WCS_URL")
+      wcs_api_key = os.getenv("WCS_API_KEY")
+      
+      if not (wcs_url and wcs_api_key):
+        raise ConnectionError("Neither local nor cloud Weaviate credentials found")
+      
+      self.logger.info(f'From .env, wcs_url: {wcs_url}, wcs_api_key: {wcs_api_key}')
+        
+      return weaviate.connect_to_wcs(
+        additional_config=AdditionalConfig(
+          timeout=Timeout(init=30, query=60, insert=120)
+        ),
+        cluster_url=wcs_url,
+        auth_credentials=weaviate.auth.AuthApiKey(wcs_api_key)
+      )
+
+  def _get_es_config(self) -> Dict[str, str]:
+    """Get and validate Elasticsearch configuration from environment"""
+    required_vars = {
+      'host': 'ES_HOST',
+      'port': 'ES_PORT',
+      'index': 'ES_LISTING_INDEX_NAME'
+    }
+    
+    config = {}
+    missing_vars = []
+    
+    for key, env_var in required_vars.items():
+      value = os.getenv(env_var)
+      if not value:
+        missing_vars.append(env_var)
+      config[key] = value
+    
+    if missing_vars:
+      raise ConnectionError(f"Missing required ES environment variables: {', '.join(missing_vars)}")
+    
+    try:
+      config['port'] = int(config['port'])
+    except ValueError:
+      raise ConnectionError(f"Invalid ES_PORT value: {config['port']}")
+    
+    return config
+
+  def _cleanup_connections(self):
+    """Clean up any existing connections"""
+    if self.datastore:
+      try:
+        self.datastore.close()
+      except Exception as e:
+        self.logger.warning(f"Error closing Weaviate connection: {e}")
+      finally:
+        self.datastore = None
+
+    if self.es_client:
+      try:
+        self.es_client.close()
+      except Exception as e:
+        self.logger.warning(f"Error closing Elasticsearch connection: {e}")
+      finally:
+        self.es_client = None
 
 
 def get_last_run_time():
@@ -428,6 +577,8 @@ def load_text_embeddings(img_cache_folder: Path, logger) -> Tuple[pd.DataFrame, 
   Load text embeddings and listing df from either timestamped or non-timestamped files.
   For timestamped files, uses the oldest ones.
   Returns (text_df, listing_df, text_file_path, listing_file_path) tuple. Any can be None.
+
+  # TODO: the format without timestamp is considered obsolete, so we should simplify this code.
   """
   # Try non-timestamped files first
   text_embeddings_file = img_cache_folder / 'text_embeddings_df'
@@ -487,7 +638,7 @@ def send_insert_failure_alert(embedding_stats: Dict[str, int],
       celery_logger.error(f"Missing required email credentials: {', '.join(missing_vars)}")
       return
 
-    embedding_type_name = 'Image' if embedding_type == 'I' else 'Text' if embedding_type == 'T' else 'Unknown'
+    embedding_type_name = 'Image' if embedding_type == 'I' else 'Text' if embedding_type == 'T' else 'N/A or Unknown'
     subject = f"VSS Embed/Index Task Failure Alert - Task ID: {task_id}"
 
     html_content = f"""
@@ -516,7 +667,7 @@ def send_insert_failure_alert(embedding_stats: Dict[str, int],
   except Exception as e:
     celery_logger.error(f"Failed to send embed/index failure alert: {str(e)}")
     
-@celery.task(bind=True, max_retries=3)
+@celery.task(bind=True, max_retries=3, track_started=True)
 def embed_and_index_task(self, 
                         img_cache_folder: str, 
                         es_fields: List[str], 
@@ -563,9 +714,11 @@ def embed_and_index_task(self,
   unsync_folder = img_cache_folder / 'unsync'
   unsync_folder.mkdir(exist_ok=True)
 
-  image_embeddings_file_used = None
-  text_embeddings_file_used = None
-  listing_df_file_used = None
+  image_embeddings_file_used, text_embeddings_file_used, listing_df_file_used = None, None, None
+
+  # this file is used to track listing folders that are currently being processed
+  # this is used mainly to correctly delete image folders after all processing has been completed successfully
+  listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
 
   # Statistics
   stats = {
@@ -581,8 +734,10 @@ def embed_and_index_task(self,
 
   weaviate_insertion_has_failed = False   # this is empirically the most likely error to occur
 
+  connection_manager = ConnectionManager()  
+
   try:
-    
+    """
     if not (os.getenv("USE_WEAVIATE").lower() == 'true'):
       raise ValueError("USE_WEAVIATE not set to 'true' in .env, this task is only for Weaviate")
     if "ES_HOST" in os.environ and "ES_PORT" in os.environ and "ES_LISTING_INDEX_NAME" in os.environ:
@@ -648,19 +803,21 @@ def embed_and_index_task(self,
           embedding_type='unknown'
       )
       return
+    """
     
+    datastore, es = connection_manager.init_conns(es_fields)
+
     # process any existing unsynced image embeddings first
     unsync_stats = process_unsync_image_embeddings(img_cache_folder, datastore, es, es_fields, text_batch_size, num_workers)
     celery_logger.info(f"Unsynced processing stats: {unsync_stats}")
 
-    # check for existing embedding files (if last run has exceptions and failed to complete)
-    listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
-
+    # Check for existing embedding files (if last run has exceptions and failed to complete)
     image_embeddings_df, image_embeddings_file_used = load_image_embeddings(img_cache_folder, celery_logger)
     
-    # Obtain image embedding
+    #####################################
+    # Begin image embedding inference
     if image_embeddings_df is None:
-      # Resolve listings to be processed    
+      # Retrieve listings from cache folder to be processed
       listing_folders = img_cache_folder.lfre(r'^\d+$')
       celery_logger.info(f'Total # of listings in {img_cache_folder}: {len(set(listing_folders))}')
 
@@ -684,10 +841,11 @@ def embed_and_index_task(self,
                                                         batch_size=image_batch_size, 
                                                         num_workers=num_workers)
       celery_logger.info(f'Ended embedding {len(image_paths)} images')
-
+    #####################################
     text_embeddings_df, listing_df, text_embeddings_file_used, listing_df_file_used = load_text_embeddings(img_cache_folder, celery_logger)
     
-    # Obtain text embedding
+    ####################################
+    # Begin text embedding inference
     if text_embeddings_df is None or listing_df is None:
       # Generate embed text
       # Note: listing_folders must exist since image embedding run first and it is responsible for instantiing it and/or dumping this pickle
@@ -708,7 +866,7 @@ def embed_and_index_task(self,
       else:
         celery_logger.info('No corresponding listings from images found from ES.')
         # create a dummy df with all required cols to fulfil downstream processing
-        text_embeddings_df = pd.DataFrame(columns=['listing_id', 'remark_chunk_id', 'embedding'])
+        text_embeddings_df = pd.DataFrame(columns=['listing_id', 'remark_chunk_id', 'sentence', 'chunk_start', 'chunk_end', 'embedding'])
 
       # there can be dups in image_embeddings_df and text_embeddings_df, we keep the latest
       image_embeddings_df.drop_duplicates(subset=['image_name'], keep='last', inplace=True)
@@ -716,12 +874,15 @@ def embed_and_index_task(self,
       text_embeddings_df.drop_duplicates(subset=['remark_chunk_id'], keep='last', inplace=True)  
       text_embeddings_df.reset_index(drop=True, inplace=True)
 
+    #####################################
+
     incoming_image_listingIds = set(image_embeddings_df.listing_id.unique())
     incoming_text_listingIds = set(text_embeddings_df.listing_id.unique())
 
     stats["total_listings_processed"] = len(incoming_image_listingIds.union(incoming_text_listingIds))
 
-    # Batch insert image embeddings
+    #####################################
+    # Begin Batch insert all embeddings
     celery_logger.info(f'Processing {len(incoming_image_listingIds)} listings and {image_embeddings_df.shape[0]} image embeddings')
     
     if len(listing_df) == 0:
@@ -732,7 +893,6 @@ def embed_and_index_task(self,
       celery_logger.info(f"Saved {len(image_embeddings_df)} unsynced image embeddings to {unsync_file}")
 
     else:
-      # Insert incoming image embeddings
       # indexed only image embeddings whose listings is in listing_df, saved the otherwise for later indexing
       image_embeddings_df, unsync_df = split_image_embeddings_by_listing_df(image_embeddings_df, listing_df)
       if len(unsync_df) > 0:
@@ -741,6 +901,8 @@ def embed_and_index_task(self,
         unsync_df.to_feather(unsync_file)
         celery_logger.info(f"Saved {len(unsync_df)} unsynced image embeddings to {unsync_file}")
 
+      #####################################
+      # Begin Batch insert image embeddings
       celery_logger.info("Begin batch insert image embeddings to weaviate")
       total_items, failed_count = retry_batch_insert(
         process_and_batch_insert_to_datastore,
@@ -765,12 +927,12 @@ def embed_and_index_task(self,
         )
 
       celery_logger.info("Ended batch insert image embeddings to weaviate")
+      # End Batch insert image embeddings
+      #####################################
 
-      # Process text embeddings
-      # Delete incoming text embeddings
+      #####################################
+      # Batch insert text embeddings
       celery_logger.info(f'Processing {len(incoming_text_listingIds)} listings and {text_embeddings_df.shape[0]} text embeddings')
-
-      # Insert incoming text embeddings
       celery_logger.info("Begin batch insert text embeddings to weaviate")
       total_items, failed_count = retry_batch_insert(
         process_and_batch_insert_to_datastore,
@@ -794,12 +956,15 @@ def embed_and_index_task(self,
           embedding_type='T'
         )
       celery_logger.info("Ended batch insert text embeddings to weaviate")
+      # End Batch insert text embeddings
+      #####################################
 
     if weaviate_insertion_has_failed:
       raise WeaviateInsertionError("One or more embeddings failed to insert into Weaviate.")
     
     set_last_run_time(task_start_time)
 
+    #####################################
     # Delete all processed listing folders
     if listing_folders is None:
       # Try to load from pickle as a last resort
@@ -814,7 +979,6 @@ def embed_and_index_task(self,
     if listing_folders is not None:
       celery_logger.info(f'Deleting all processed {len(listing_folders)} listing folders')
       for listing_folder in listing_folders:
-        # listing_folder_path = img_cache_folder / str(listing_id)
         try:
           shutil.rmtree(listing_folder)    
         except Exception as e:
@@ -822,11 +986,11 @@ def embed_and_index_task(self,
       celery_logger.info(f'Deleted all processed {len(listing_folders)} listing folders')
     else:
       celery_logger.warning('No listing folders deletion happens, consider investigate if there are other problems.')
+    #####################################
 
     # Calculate total statistics
     stats["total_embeddings_inserted"] = stats["image_embeddings_inserted"] + stats["text_embeddings_inserted"]
 
-    # TODO: consider commenting these out when deployed
     # Backup
     backup(
       backup_folder=img_cache_folder/'backup',
@@ -839,6 +1003,17 @@ def embed_and_index_task(self,
 
     task_status = "Completed"
 
+  except ConnectionError as e:
+    error_message = str(e)
+    send_insert_failure_alert(
+      embedding_stats={},
+      task_id=self.request.id,
+      error_message=error_message,
+      embedding_type='N/A'
+    )
+
+    task_status = "Failed"
+
   except (Exception, WeaviateInsertionError) as e:
     error_message = str(e)
     if isinstance(e, WeaviateInsertionError):
@@ -846,7 +1021,7 @@ def embed_and_index_task(self,
     else:
       celery_logger.error(f"Error: {error_message}")
     
-    # if there's an error, try save the embeddings and listing_df
+    # if there's an error, save the image/text embeddings and listing_df
     timestamp = datetime.now().strftime("%Y%m%d%H%M")
 
     if image_embeddings_df is not None and not image_embeddings_df.empty:
@@ -865,14 +1040,15 @@ def embed_and_index_task(self,
     task_status = "Failed"
 
   finally:
-    if datastore:
-      datastore.close()
-    if 'es' in locals() and es is not None:
-      es.close()
+    # close all connections
+    connection_manager._cleanup_connections()
 
+    # allow gc to collect dataframes
     del image_embeddings_df
     del text_embeddings_df
     gc.collect()
+
+    # empty GPU cache
     try:
       if device.type == 'cuda':
         torch.cuda.empty_cache()
@@ -889,11 +1065,7 @@ def embed_and_index_task(self,
 
     if task_status == "Completed":
       # Remove the temporary files
-      files_to_cleanup = [f for f in [
-        image_embeddings_file_used,
-        text_embeddings_file_used,
-        listing_df_file_used,
-        listing_folders_pickle_file
+      files_to_cleanup = [f for f in [image_embeddings_file_used, text_embeddings_file_used, listing_df_file_used, listing_folders_pickle_file
       ] if f is not None]
 
       for file in files_to_cleanup:
