@@ -716,6 +716,10 @@ def embed_and_index_task(self,
 
   image_embeddings_file_used, text_embeddings_file_used, listing_df_file_used = None, None, None
 
+  # Flags to track if model embedding occurred
+  image_embedding_done = False
+  text_embedding_done = False
+
   # this file is used to track listing folders that are currently being processed
   # this is used mainly to correctly delete image folders after all processing has been completed successfully
   listing_folders_pickle_file = img_cache_folder / 'listing_folders.pkl'
@@ -840,6 +844,7 @@ def embed_and_index_task(self,
       image_embeddings_df = image_embedding_model.embed(image_paths=image_paths, 
                                                         batch_size=image_batch_size, 
                                                         num_workers=num_workers)
+      image_embedding_done = True
       celery_logger.info(f'Ended embedding {len(image_paths)} images')
     #####################################
     text_embeddings_df, listing_df, text_embeddings_file_used, listing_df_file_used = load_text_embeddings(img_cache_folder, celery_logger)
@@ -862,6 +867,7 @@ def embed_and_index_task(self,
                                                         # use_dataloader=True, 
                                                         use_dataloader=False, 
                                                         num_workers=num_workers)
+        text_embedding_done = True
         celery_logger.info(f'Ended text embedding for {len(listing_df)} listings')
       else:
         celery_logger.info('No corresponding listings from images found from ES.')
@@ -1024,11 +1030,11 @@ def embed_and_index_task(self,
     # if there's an error, save the image/text embeddings and listing_df
     timestamp = datetime.now().strftime("%Y%m%d%H%M")
 
-    if image_embeddings_df is not None and not image_embeddings_df.empty:
+    if image_embedding_done and image_embeddings_df is not None and not image_embeddings_df.empty:
       image_embeddings_df.to_feather(img_cache_folder / f'image_embeddings_df.{timestamp}')
-    if text_embeddings_df is not None and not text_embeddings_df.empty:
+    if text_embedding_done and text_embeddings_df is not None and not text_embeddings_df.empty:
       text_embeddings_df.to_feather(img_cache_folder / f'text_embeddings_df.{timestamp}')
-    if listing_df is not None and not listing_df.empty:
+    if text_embedding_done and listing_df is not None and not listing_df.empty:
       listing_df.to_feather(img_cache_folder / f'listing_df.{timestamp}')
 
     send_insert_failure_alert(
