@@ -12,8 +12,14 @@ fi
 # mac: rabbitmqctl list_queues; rabbitmqctl purge_queue embed_index_queue
 
 echo "Stopping existing Celery workers if any ..."
-# pkill -f 'celery worker'
-pgrep -f 'celery' | grep -v $$ | xargs kill -9
+pids=$(pgrep -f 'celery' | grep -v $$)
+
+if [ -n "$pids" ]; then
+  echo "$pids" | xargs kill -9
+  echo "Stopped existing Celery workers."
+else
+  echo "No Celery workers found to stop."
+fi
 
 sleep 2
 
