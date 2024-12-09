@@ -70,7 +70,7 @@ class ListingReconciliation:
       # Delete listings from Weaviate
       deletion_stats = self.datastore.delete_listings_by_batch(
         listing_ids=list(to_delete),
-        batch_size=min(100, len(to_delete)),  # Smaller batches for deletion
+        batch_size=min(10, len(to_delete)),  # Smaller batches for deletion
         sleep_time=self.sleep_time
       )
       
@@ -94,7 +94,7 @@ class ListingReconciliation:
     total_stats = {
       "total_listings": 0,
       "total_processed": 0,
-      "total_deleted": 0,
+      "total_objects_deleted": 0,
       "total_errors": 0,
       "batches_processed": 0
     }
@@ -115,7 +115,7 @@ class ListingReconciliation:
         
         # Update total stats
         total_stats["total_processed"] += batch_stats["processed"]
-        total_stats["total_deleted"] += batch_stats["deleted"]
+        total_stats["total_objects_deleted"] += batch_stats["deleted"]
         total_stats["total_errors"] += batch_stats["errors"]
         total_stats["batches_processed"] += 1
 
