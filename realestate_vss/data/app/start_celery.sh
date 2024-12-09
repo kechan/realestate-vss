@@ -13,7 +13,7 @@ fi
 
 echo "Stopping existing Celery workers if any ..."
 # pkill -f 'celery worker'
-pgrep -f 'celery' | xargs kill -9
+pgrep -f 'celery' | grep -v $$ | xargs kill -9
 
 sleep 2
 
