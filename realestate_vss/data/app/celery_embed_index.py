@@ -39,7 +39,7 @@ REDIS_HOST = os.getenv('CELERY_BACKEND_REDIS_HOST_IP', '127.0.0.1')
 if os.getenv('CELERY_ENABLE_RESULT_BACKEND', 'false').lower() == 'true':
   celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//', backend=f'redis://{REDIS_HOST}:6379/1')
   # celery.conf.result_backend = f'redis://{REDIS_HOST}:6379/1'
-  celery.conf.result_expires = 86400  # 1 day = 86400 seconds
+  celery.conf.result_expires = 86400*7  # 7 days = 86400 * 7 seconds
   celery.conf.task_track_started = True
 else:
   celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//')
@@ -1095,6 +1095,7 @@ def embed_and_index_task(self,
         embedding_type='unknown'
       )
       return {"status": "Failed", 
+              "message": "Embedding and indexing failed",
               "error": error_message,
               "start_time": task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
               "end_time": task_end_time.strftime("%Y-%m-%d %H:%M:%S")

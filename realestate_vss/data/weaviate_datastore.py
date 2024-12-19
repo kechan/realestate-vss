@@ -25,6 +25,7 @@ try:
   from weaviate.classes.config import Configure, Property, DataType
   from weaviate.classes.query import MetadataQuery, Filter
   from weaviate.exceptions import UnexpectedStatusCodeError
+  from weaviate.classes.config import ConsistencyLevel
 except ImportError:
   raise NotImplementedError("This class is only compatible with weaviate-client v4")
 
@@ -42,7 +43,9 @@ class WeaviateDataStore:
   def __init__(self,
                image_embedder,
                text_embedder,
-               score_aggregation_method = 'max'
+               score_aggregation_method = 'max',
+               use_replication = False,
+               consistency_level: str = "ONE"
                ):
     self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -67,6 +70,18 @@ class WeaviateDataStore:
       'remarks', 'photo', # Additional information
       'listingDate', 'lastPhotoUpdate', 'lastUpdate' # Timestamps
     ]
+
+    # Replication settings
+    self.use_replication = use_replication
+    self._consistency_levels = {
+      "ONE": weaviate.classes.config.ConsistencyLevel.ONE,
+      "QUORUM": weaviate.classes.config.ConsistencyLevel.QUORUM,
+      "ALL": weaviate.classes.config.ConsistencyLevel.ALL 
+    }
+    if consistency_level not in self._consistency_levels:
+      raise ValueError(f"consistency_level must be one of {list(self._consistency_levels.keys())}")
+    self.consistency_level = self._consistency_levels[consistency_level]
+
 
   def _create_key(self, listing_json: Dict, embedding_type: str = 'I') -> uuid.UUID:
       """
@@ -391,16 +406,30 @@ class WeaviateDataStore:
   def ping(self) -> bool:
     return self.client.is_ready()
 
+  # Helpers
+  def _get_collection(self, collection_name: str):
+    """Helper to get collection with consistency level if replication is enabled"""
+    collection = self.client.collections.get(collection_name)
+    if self.use_replication:
+      collection = collection.with_consistency_level(self.consistency_level)
+    return collection
+
 class WeaviateDataStore_v4(WeaviateDataStore):
   def __init__(self, 
                client: weaviate.client.Client,
                image_embedder,
                text_embedder,
                score_aggregation_method = 'max',
-               run_create_collection = False
+               run_create_collection = False,
+               use_replication = False,
+               n_replications = 3,
+               consistency_level: str = "ONE"
                ):
-    super().__init__(image_embedder, text_embedder, score_aggregation_method)
+    super().__init__(image_embedder, text_embedder, score_aggregation_method,
+                     use_replication=use_replication,
+                     consistency_level=consistency_level)
     self.client = client
+    self.n_replications = n_replications
 
     # TODO: work on the specific exception to catch
     if run_create_collection:
@@ -454,23 +483,32 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       Property(name="image_name", data_type=DataType.TEXT)
     ]
 
+    image_collection_config = {
+      "vectorizer_config": Configure.Vectorizer.none(),
+      "vector_index_config": Configure.VectorIndex.hnsw(
+        distance_metric=weaviate.classes.config.VectorDistances.COSINE,
+        max_connections=64,
+        ef_construction=128,
+        cleanup_interval_seconds=300,
+        vector_cache_max_objects=2000000
+      ),
+      "properties": listing_image_properties,
+      "inverted_index_config": Configure.inverted_index(
+        stopwords_preset=weaviate.classes.config.StopwordsPreset.NONE,
+        index_null_state=True,
+        index_property_length=True,
+        index_timestamps=True,
+      )
+    }
+
+    if self.use_replication:
+      image_collection_config["replication_config"] = Configure.replication(
+        factor=self.n_replications
+      )
+    
     self.client.collections.create(
       name="Listing_Image",
-      vectorizer_config=Configure.Vectorizer.none(),
-      vector_index_config=Configure.VectorIndex.hnsw(
-          distance_metric=weaviate.classes.config.VectorDistances.COSINE,
-          max_connections=64,
-          ef_construction=128,
-          cleanup_interval_seconds=300,
-          vector_cache_max_objects=2000000
-      ),
-      properties=listing_image_properties,
-      inverted_index_config=Configure.inverted_index(
-          stopwords_preset=weaviate.classes.config.StopwordsPreset.NONE,
-          index_null_state=True,
-          index_property_length=True,
-          index_timestamps=True,
-      )
+      **image_collection_config
     )
 
     listing_text_properties = common_properties + [
@@ -479,24 +517,72 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       Property(name="chunk_end", data_type=DataType.INT)
     ]
 
-    self.client.collections.create(
-      name="Listing_Text",
-      vectorizer_config=Configure.Vectorizer.none(),
-      vector_index_config=Configure.VectorIndex.hnsw(
+    text_collection_config = {
+      "vectorizer_config": Configure.Vectorizer.none(),
+      "vector_index_config": Configure.VectorIndex.hnsw(
           distance_metric=weaviate.classes.config.VectorDistances.COSINE,
           max_connections=64,
           ef_construction=128,
           cleanup_interval_seconds=300,
           vector_cache_max_objects=2000000
       ),
-      properties=listing_text_properties,
-      inverted_index_config=Configure.inverted_index(
+      "properties": listing_text_properties,
+      "inverted_index_config": Configure.inverted_index(
           stopwords_preset=weaviate.classes.config.StopwordsPreset.NONE,
           index_null_state=True,
           index_property_length=True,
           index_timestamps=True
       )
+    }
+
+    if self.use_replication:
+      text_collection_config["replication_config"] = Configure.replication(
+        factor=self.n_replications
+      )
+
+    self.client.collections.create(
+      name="Listing_Text",
+      **text_collection_config
     )
+
+    # self.client.collections.create(
+    #   name="Listing_Image",
+    #   vectorizer_config=Configure.Vectorizer.none(),
+    #   vector_index_config=Configure.VectorIndex.hnsw(
+    #       distance_metric=weaviate.classes.config.VectorDistances.COSINE,
+    #       max_connections=64,
+    #       ef_construction=128,
+    #       cleanup_interval_seconds=300,
+    #       vector_cache_max_objects=2000000
+    #   ),
+    #   properties=listing_image_properties,
+    #   inverted_index_config=Configure.inverted_index(
+    #       stopwords_preset=weaviate.classes.config.StopwordsPreset.NONE,
+    #       index_null_state=True,
+    #       index_property_length=True,
+    #       index_timestamps=True,
+    #   )
+    # )
+
+    # self.client.collections.create(
+    #   name="Listing_Text",
+    #   vectorizer_config=Configure.Vectorizer.none(),
+    #   vector_index_config=Configure.VectorIndex.hnsw(
+    #       distance_metric=weaviate.classes.config.VectorDistances.COSINE,
+    #       max_connections=64,
+    #       ef_construction=128,
+    #       cleanup_interval_seconds=300,
+    #       vector_cache_max_objects=2000000
+    #   ),
+    #   properties=listing_text_properties,
+    #   inverted_index_config=Configure.inverted_index(
+    #       stopwords_preset=weaviate.classes.config.StopwordsPreset.NONE,
+    #       index_null_state=True,
+    #       index_property_length=True,
+    #       index_timestamps=True
+    #   )
+    # )
+
 
   def get_collections_config(self):
     def format_collection_config(collection_config):
@@ -591,7 +677,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       # listing_images = self.get(listing_id, embedding_type='I')  # image embeddings
       # for doc in listing_images:
       #   self._delete_object_by_uuid(doc['uuid'], 'Listing_Image')      
-      collection = self.client.collections.get("Listing_Image")
+      # collection = self.client.collections.get("Listing_Image")
+      collection = self._get_collection("Listing_Image")
       collection.data.delete_many(
         where=Filter.by_property("listing_id").equal(listing_id)
       )
@@ -600,7 +687,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       # listing_texts = self.get(listing_id, embedding_type='T')  # text embeddings
       # for doc in listing_texts:
       #   self._delete_object_by_uuid(doc['uuid'], 'Listing_Text')
-      collection = self.client.collections.get("Listing_Text")
+      # collection = self.client.collections.get("Listing_Text")
+      collection = self._get_collection("Listing_Text")
       collection.data.delete_many(
         where=Filter.by_property("listing_id").equal(listing_id)
       )
@@ -643,7 +731,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       count_before = self.count_all()
 
       if embedding_type == 'I' or embedding_type is None:
-        collection = self.client.collections.get("Listing_Image")
+        # collection = self.client.collections.get("Listing_Image")
+        collection = self._get_collection("Listing_Image")
         for i in tqdm(range(0, len(listing_ids), batch_size), desc="Deleting image embeddings"):
           batch_ids = listing_ids[i:i+batch_size]
           try:
@@ -665,7 +754,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
             self.logger.error(f"Failed to delete image batch starting at index {i}: {str(e)}")
       
       if embedding_type == 'T' or embedding_type is None:
-        collection = self.client.collections.get("Listing_Text")
+        # collection = self.client.collections.get("Listing_Text")
+        collection = self._get_collection("Listing_Text")
         for i in tqdm(range(0, len(listing_ids), batch_size), desc="Deleting text embeddings"):
           batch_ids = listing_ids[i:i+batch_size]
           try:
@@ -723,7 +813,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     extra_properties = ['image_name'] if embedding_type == 'I' else ['remark_chunk_id']
 
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     # Create filter if listing_id is provided
     if listing_id:
@@ -753,7 +844,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     Retrieve all items related to embedding_type.
     """
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     all_objects = []
     for o in tqdm(collection.iterator(
@@ -776,7 +868,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
   def insert(self, listing_json: Dict, embedding_type: str = 'I'):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
     key = self._create_key(listing_json, embedding_type)
@@ -799,7 +892,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
 
   def upsert(self, listing_json: Dict, embedding_type: str = 'I'):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name
+    collection = self._get_collection(collection_name)
 
     listing_json = self._preprocess_listing_json(listing_json, embedding_type=embedding_type)
     key = self._create_key(listing_json, embedding_type)
@@ -848,7 +942,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       raise ValueError("embedding_type must be either 'I' for images or 'T' for text")
 
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     total_count = collection.aggregate.over_all().total_count
     current_chunk = []
@@ -898,7 +993,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       raise ValueError("embedding_type must be either 'I' for images or 'T' for text")
    
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     def chunks(iterable, size):
       for i in range(0, len(iterable), size):
@@ -970,7 +1066,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
         - failed_objects: list of objects that failed to insert
     """
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     def chunks(iterable, size):
       for i in range(0, len(iterable), size):
@@ -1035,7 +1132,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   @retry(**RETRY_SETTINGS)
   def batch_upsert(self, listings: Iterable[Dict], embedding_type: str = 'I'):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     try:
       with collection.batch.dynamic() as batch:
@@ -1064,7 +1162,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   def _search_image_2_image(self, image: Image.Image = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'I'   # targets are images
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     if embedding is None:
       embedding = self.image_embedder.embed_from_single_image(image).flatten().tolist()
@@ -1103,7 +1202,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   def _search_image_2_text(self, image: Image.Image = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'T'   # targets are text
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     if embedding is None:
       embedding = self.image_embedder.embed_from_single_image(image).flatten().tolist()
@@ -1149,7 +1249,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   def _search_text_2_image(self, phrase: str = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'I'   # targets are images
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     if embedding is None:
       embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
@@ -1188,7 +1289,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   def _search_text_2_text(self, phrase: str = None, embedding: List[float] = None, topk=5, group_by_listingId=False, include_all_fields=False, **filters):
     embedding_type = 'T'   # targets are text
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     if embedding is None:
       embedding = self.text_embedder.embed_from_texts([phrase], batch_size=1)[0].flatten().tolist()
@@ -1402,7 +1504,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   def _delete_object_by_uuid(self, uuid, collection_name):
     try:
       # Delete the object based on its UUID and collection name
-      collection = self.client.collections.get(collection_name)
+      # collection = self.client.collections.get(collection_name)
+      collection = self._get_collection(collection_name)
       collection.data.delete_by_id(uuid)
       self.logger.info(f"Object with UUID {uuid} successfully deleted.")
 
@@ -1413,7 +1516,8 @@ class WeaviateDataStore_v4(WeaviateDataStore):
   def _count_by_collection_name(self, collection_name: str) -> int:
     try:
       # Count the number of objects in the class
-      collection = self.client.collections.get(collection_name)
+      # collection = self.client.collections.get(collection_name)
+      collection = self._get_collection(collection_name)
       return collection.aggregate.over_all().total_count
 
     except Exception as e:
@@ -1450,7 +1554,9 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
                 async_client: WeaviateAsyncClient,
                 image_embedder,
                 text_embedder,
-                score_aggregation_method = 'max'
+                score_aggregation_method = 'max',
+                use_replication = False,
+                consistency_level: str = "ONE"
               ):
     """
     Initialize the AsyncWeaviateDataStore_v4 with an asynchronous Weaviate client.
@@ -1461,7 +1567,10 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
         text_embedder: The text embedder instance.
         score_aggregation_method (str): Method to aggregate scores ('max' or 'mean').
     """
-    super().__init__(image_embedder, text_embedder, score_aggregation_method)
+    super().__init__(image_embedder, text_embedder, score_aggregation_method,
+                     use_replication=use_replication,
+                     consistency_level=consistency_level
+                     )
     self.client = async_client
 
 
@@ -1487,7 +1596,8 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
     extra_properties = ['image_name'] if embedding_type == 'I' else ['remark_chunk_id']
 
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     # Create filter if listing_id is provided
     if listing_id:
@@ -1566,7 +1676,8 @@ class AsyncWeaviateDataStore_v4(WeaviateDataStore):
         embedding_type (str): 'I' for image-related searches or 'T' for text-related searches.
     """
     collection_name = "Listing_Image" if embedding_type == 'I' else "Listing_Text"
-    collection = self.client.collections.get(collection_name)
+    # collection = self.client.collections.get(collection_name)
+    collection = self._get_collection(collection_name)
 
     if embedding is None:
       if image is not None:

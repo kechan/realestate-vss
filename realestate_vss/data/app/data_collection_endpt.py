@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, Body, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 from pathlib import Path
 import shutil, os, gzip, json
 from datetime import datetime
@@ -21,6 +22,7 @@ from celery_unstack import unstack
 from celery_embed_index import embed_and_index_task
 from celery_delete_inactive import delete_inactive_listings_task
 
+import redis
 import logging
 
 # use this to establish a public endpt for image tagging service pipeline to upload image to
@@ -146,6 +148,9 @@ if "IMG_CACHE_FOLDER" in os.environ:
   print(f"img_cache_folder: {img_cache_folder}")
 else:
   raise ValueError("IMG_CACHE_FOLDER not found in .env")
+
+if "CELERY_BACKEND_REDIS_HOST_IP" in os.environ:
+  redis_host = os.getenv("CELERY_BACKEND_REDIS_HOST_IP", "127.0.0.1")
 
 @app.get("/")
 async def root():
@@ -310,27 +315,6 @@ async def delete_inactive(batch_size: int = Query(20), sleep_time: float = Query
   })
 
 
-@app.get("/embed_and_index_task_status/{task_id}")
-async def get_embed_and_index_task_status(task_id: str):
-  task_result = embed_and_index_task.AsyncResult(task_id)
-  response = {
-      "task_id": task_id,
-      "status": task_result.status,
-      "result": task_result.result if task_result.ready() else None
-  }
-  return JSONResponse(content=response)
-
-@app.get("/delete_inactive_listings_task_status/{task_id}")
-async def get_delete_inactive_listings_task_status(task_id: str):
-  task_result = delete_inactive_listings_task.AsyncResult(task_id)
-  response = {
-      "task_id": task_id,
-      "status": task_result.status,
-      "result": task_result.result if task_result.ready() else None
-  }
-  return JSONResponse(content=response)
-
-# Add the new endpoint
 @app.get("/delete_old_unsync")
 async def delete_old_unsync(expiration_days: int = Query(30)):
   """
@@ -383,6 +367,129 @@ async def delete_old_unsync(expiration_days: int = Query(30)):
   except Exception as e:
     raise HTTPException(status_code=500, detail=str(e))
   
+# For Task tracking endpoints
+class TaskInfo(BaseModel):
+  task_id: str
+  task_type: str  # 'embed_index' or 'delete'
+  status: str
+  created_at: datetime
+  result: Optional[Dict] = None
+
+def get_redis_client():
+  try:
+    return redis.Redis(host=redis_host, port=6379, db=1)
+  except Exception as e:
+    logging.error(f"Error connecting to Redis: {str(e)}")
+    raise HTTPException(status_code=500, detail="Error connecting to Redis")
+  
+def get_task_type(task_id: str) -> str:
+  """Determine task type based on task ID pattern or metadata."""
+  try:
+    client = get_redis_client()
+    # Get task metadata
+    task_meta = client.get(f'celery-task-meta-{task_id}')
+    if task_meta:
+      # Look for signatures in the task result that indicate the task type
+      if b'Embedding and indexing' in task_meta:
+        return 'embed_index'
+      elif b'Deletion of inactive listings' in task_meta:
+        return 'delete'
+    return 'unknown'
+  except Exception:
+    return 'unknown'
+
+def parse_task_info(task_id: str, meta_data: bytes) -> TaskInfo:
+  """Parse Redis task metadata into TaskInfo object."""
+  try:
+    import json
+    task_data = json.loads(meta_data)
+    
+    # Extract status and result
+    status = task_data.get('status', 'UNKNOWN')
+    result = task_data.get('result', None)
+    
+    # Get task creation time from Redis key TTL
+    client = get_redis_client()
+    ttl = client.ttl(f'celery-task-meta-{task_id}')
+    # Since tasks expire in 7 days (604800 seconds), calculate creation time
+    created_at = datetime.now().timestamp() - (604800 - ttl)
+    
+    return TaskInfo(
+      task_id=task_id,
+      task_type=get_task_type(task_id),
+      status=status,
+      created_at=datetime.fromtimestamp(created_at),
+      result=result
+    )
+  except Exception as e:
+    logging.error(f"Error parsing task info for {task_id}: {e}")
+    return TaskInfo(
+      task_id=task_id,
+      task_type='unknown',
+      status='ERROR',
+      created_at=datetime.now(),
+      result=None
+    )
+
+@app.get("/embed_and_index_task_status/{task_id}")
+async def get_embed_and_index_task_status(task_id: str):
+  task_result = embed_and_index_task.AsyncResult(task_id)
+  response = {
+      "task_id": task_id,
+      "status": task_result.status,
+      "result": task_result.result if task_result.ready() else None
+  }
+  return JSONResponse(content=response)
+
+@app.get("/delete_inactive_listings_task_status/{task_id}")
+async def get_delete_inactive_listings_task_status(task_id: str):
+  task_result = delete_inactive_listings_task.AsyncResult(task_id)
+  response = {
+      "task_id": task_id,
+      "status": task_result.status,
+      "result": task_result.result if task_result.ready() else None
+  }
+  return JSONResponse(content=response)
+
+@app.get("/tasks", response_model=List[TaskInfo])
+async def get_task_history() -> List[TaskInfo]:
+  """
+  Get all task IDs and their metadata from Redis, sorted by creation time in descending order.
+  Only returns tasks from the last 7 days (based on Celery's result_expires setting).
+  """
+  try:
+    client = get_redis_client()
+    
+    # Get all task metadata keys
+    task_keys = client.keys('celery-task-meta-*')
+    tasks = []
+    
+    for key in task_keys:
+      try:
+        task_id = key.decode('utf-8').replace('celery-task-meta-', '')
+        meta_data = client.get(key)
+        if meta_data:
+          task_info = parse_task_info(task_id, meta_data)
+          tasks.append(task_info)
+      except Exception as e:
+        logging.warning(f"Error processing task {key}: {e}")
+        continue
+    
+    # Sort tasks by creation time in descending order
+    sorted_tasks = sorted(tasks, key=lambda x: x.created_at, reverse=True)
+    return sorted_tasks
+    
+  except redis.RedisError as e:
+    logging.error(f"Redis error: {e}")
+    raise HTTPException(status_code=500, detail="Failed to retrieve task history")
+  except Exception as e:
+    logging.error(f"Unexpected error: {e}")
+    raise HTTPException(status_code=500, detail="Internal server error")
+
+
+
+
+
 # Run the server and reload on changes
 # if __name__ == "__main__":
 #     uvicorn.run(app, host="0.0.0.0", port=8000)

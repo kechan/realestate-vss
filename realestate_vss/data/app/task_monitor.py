@@ -18,11 +18,11 @@ class TaskMonitor:
     return {}
 
   def get_task_duration_hours(self, key: bytes) -> float:
-    # Default TTL is 86400 seconds (24 hours)
+    # Default TTL is 604800 seconds (7 days)
     ttl = self.redis.ttl(key)
     if ttl > 0:
         # Age = default TTL - current TTL
-        age_in_seconds = 86400 - ttl
+        age_in_seconds = 604800 - ttl
         return age_in_seconds / 3600
     return 0
   
