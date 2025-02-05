@@ -14,6 +14,13 @@ try:
   from optimum.quanto import Calibration, freeze, qfloat8, qint4, qint8, quantize
 except AttributeError as e:
   print(f"Warning: Failed to import optimum.quanto due to {e}. Must run without quantization.")
+  Calibration = None
+  freeze = None
+  qfloat8 = None
+  qint4 = None
+  qint8 = None
+  quantize = None
+  
 
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import pandas as pd
