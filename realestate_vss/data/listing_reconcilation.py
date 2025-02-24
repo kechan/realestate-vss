@@ -1,5 +1,5 @@
-from typing import List, Set, Dict, Any, Optional
-import logging
+from typing import List, Set, Dict, Any, Optional, Iterator
+import logging, gc
 from datetime import datetime
 import time
 
@@ -13,33 +13,24 @@ class ListingReconciliation:
   def __init__(self, 
     weaviate_datastore: WeaviateDataStore,
     es_client: ESClient,
-    batch_size: int = 1000,
-    sleep_time: float = 0.5
+    batch_size: int = 500,
+    max_batches: Optional[int] = None,  # limit number of batches per run
+    sleep_time: float = 1.0
   ):
     self.datastore = weaviate_datastore
     self.es_client = es_client
     self.batch_size = batch_size
+    self.max_batches = max_batches
     self.sleep_time = sleep_time
     self.logger = logging.getLogger(__name__)
 
-  def get_all_weaviate_listing_ids(self) -> Set[str]:
+  def get_all_weaviate_listing_ids(self) -> Iterator[str]:
     """
-    Get all unique listing IDs from Listing_Image collection in Weaviate.
-    Uses collection iterator to handle large datasets efficiently.
-    
-    Note: We only need to check Listing_Image since text embeddings are always
-    generated based on the listings found in the image collection during the
-    embed_and_index process.
-
-    It took about 8.5 minutes to return 58941 listings.
+    Yield listing IDs from Weaviate in an iterator instead of keeping all in memory.
     """
-    listing_ids = set()
     image_collection = self.datastore.client.collections.get("Listing_Image")
-    
     for obj in image_collection.iterator():
-      listing_ids.add(obj.properties.get('listing_id'))
-        
-    return listing_ids
+      yield obj.properties.get('listing_id')
 
   def process_batch(self, listing_ids: List[str]) -> Dict[str, Any]:
     """
@@ -59,18 +50,23 @@ class ListingReconciliation:
     active_listings = self.es_client.get_active_listings(listing_ids)
     active_listing_ids = {doc['jumpId'] for doc in active_listings}
 
-    # Identify listings to delete (not in ES or not active)
-    to_delete = set(listing_ids) - active_listing_ids
+     # Free memory as soon as active_listings is no longer needed
+    del active_listings
+    gc.collect()
+
+    # Identify listings to delete
+    to_delete = list(filter(lambda x: x not in active_listing_ids, listing_ids))
     stats["to_delete"] = len(to_delete)
 
     if not to_delete:
       return stats
 
     try:
-      # Delete listings from Weaviate
+      # Reduce batch size dynamically
+      batch_size = min(10, len(to_delete))   # Small safe batch
       deletion_stats = self.datastore.delete_listings_by_batch(
-        listing_ids=list(to_delete),
-        batch_size=min(10, len(to_delete)),  # Smaller batches for deletion
+        listing_ids=to_delete,
+        batch_size=batch_size,
         sleep_time=self.sleep_time
       )
       
@@ -81,14 +77,15 @@ class ListingReconciliation:
       self.logger.error(f"Error deleting listings: {str(e)}")
       stats["errors"] = len(to_delete)
 
+    # Force garbage collection after deletion
+    del to_delete
+    gc.collect()
+
     return stats
 
   def reconcile(self, max_listings: Optional[int] = None) -> Dict[str, Any]:
     """
-    Main reconciliation process.
-    
-    Args:
-      max_listings: Optional limit on number of listings to process
+    Main reconciliation process with an optional limit on the number of batches.
     """
     start_time = datetime.now()
     total_stats = {
@@ -100,42 +97,51 @@ class ListingReconciliation:
     }
 
     try:
-      # Get all listing IDs from Weaviate
-      all_listing_ids = list(self.get_all_weaviate_listing_ids())
-      total_stats["total_listings"] = len(all_listing_ids)
+      # Process listings as an iterator to reduce memory pressure
+      listing_id_iterator = self.get_all_weaviate_listing_ids()
+      
+      batch = []
+      for i, listing_id in enumerate(listing_id_iterator):
+        if max_listings and i >= max_listings:
+          break
+        batch.append(listing_id)
 
-      if max_listings:
-        all_listing_ids = all_listing_ids[:max_listings]
+        if len(batch) >= self.batch_size:
+          batch_stats = self.process_batch(batch)
+          
+          # Update total stats
+          total_stats["total_processed"] += batch_stats["processed"]
+          total_stats["total_objects_deleted"] += batch_stats["deleted"]
+          total_stats["total_errors"] += batch_stats["errors"]
+          total_stats["batches_processed"] += 1
 
-      # Process in batches
-      for i in range(0, len(all_listing_ids), self.batch_size):
-        batch = all_listing_ids[i:i + self.batch_size]
-        
+          self.logger.info(
+            f"Processed batch {total_stats['batches_processed']}: "
+            f"{batch_stats['deleted']} deleted, {batch_stats['errors']} errors"
+          )
+
+          batch.clear()  # Clear memory
+          time.sleep(self.sleep_time)
+
+          # Stop processing if max_batches limit is reached
+          if self.max_batches and total_stats["batches_processed"] >= self.max_batches:
+            break
+
+      # Process remaining batch if within batch limit
+      if batch and (not self.max_batches or total_stats["batches_processed"] < self.max_batches):
         batch_stats = self.process_batch(batch)
-        
-        # Update total stats
         total_stats["total_processed"] += batch_stats["processed"]
         total_stats["total_objects_deleted"] += batch_stats["deleted"]
         total_stats["total_errors"] += batch_stats["errors"]
         total_stats["batches_processed"] += 1
 
-        # Log progress
-        self.logger.info(
-          f"Processed batch {total_stats['batches_processed']}: "
-          f"{batch_stats['deleted']} deleted, "
-          f"{batch_stats['errors']} errors"
-        )
-
-        time.sleep(self.sleep_time)  # Prevent overwhelming the services
+      total_stats["duration_seconds"] = (datetime.now() - start_time).total_seconds()
 
     except Exception as e:
       self.logger.error(f"Reconciliation failed: {str(e)}")
       total_stats["error"] = str(e)
 
-    total_stats["duration_seconds"] = (datetime.now() - start_time).total_seconds()
-    
     return total_stats
-
 # Example usage:
 # reconciler = ListingReconciliation(weaviate_datastore, es_client)
 # stats = reconciler.reconcile(max_listings=10000)  # Process first 10k listings
