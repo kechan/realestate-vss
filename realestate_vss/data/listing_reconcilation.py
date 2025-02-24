@@ -89,7 +89,7 @@ class ListingReconciliation:
     """
     start_time = datetime.now()
     total_stats = {
-      "total_listings": 0,
+      # "total_listings": 0,
       "total_processed": 0,
       "total_objects_deleted": 0,
       "total_errors": 0,
