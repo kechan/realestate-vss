@@ -10,18 +10,23 @@ from .weaviate_datastore import WeaviateDataStore_v4 as WeaviateDataStore
 from .es_client import ESClient
 
 class ListingReconciliation:
-  def __init__(self, 
+  def __init__(
+    self, 
     weaviate_datastore: WeaviateDataStore,
     es_client: ESClient,
     batch_size: int = 500,
-    max_batches: Optional[int] = None,  # limit number of batches per run
-    sleep_time: float = 1.0
+    max_batches: Optional[int] = None,
+    sleep_time: float = 1.0,
+    skip_deletion: bool = False,  # Option to skip actual deletion
+    es_snapshot_file: Optional[str] = None  # File to store ES query results
   ):
     self.datastore = weaviate_datastore
     self.es_client = es_client
     self.batch_size = batch_size
     self.max_batches = max_batches
     self.sleep_time = sleep_time
+    self.skip_deletion = skip_deletion
+    self.es_snapshot_file = es_snapshot_file
     self.logger = logging.getLogger(__name__)
 
   def get_all_weaviate_listing_ids(self) -> Iterator[str]:
@@ -32,12 +37,35 @@ class ListingReconciliation:
     for obj in image_collection.iterator():
       yield obj.properties.get('listing_id')
 
+  def load_or_fetch_active_listings(self, listing_ids: List[str]) -> Set[str]:
+    """
+    Load active listings from file if available, otherwise fetch from ES and store.
+    """
+    if self.es_snapshot_file:
+      try:
+        with open(self.es_snapshot_file, 'r') as f:
+          active_listing_ids = set(json.load(f))
+        self.logger.info("Loaded active listings from snapshot file.")
+        return active_listing_ids
+      except (FileNotFoundError, json.JSONDecodeError):
+        self.logger.warning("ES snapshot file not found or corrupted! Querying ES.")
+    
+    active_listings = self.es_client.get_active_listings(listing_ids)
+    active_listing_ids = {doc['jumpId'] for doc in active_listings}
+    
+    if self.es_snapshot_file:
+      with open(self.es_snapshot_file, 'w') as f:
+        json.dump(list(active_listing_ids), f)
+      self.logger.info("Saved active listings snapshot to disk.")
+    
+    return active_listing_ids
+
   def process_batch(self, listing_ids: List[str]) -> Dict[str, Any]:
     """
     Process a batch of listing IDs:
-    1. Query ES for these IDs
+    1. Query ES for these IDs (or load from file)
     2. Identify which ones need deletion
-    3. Delete from Weaviate
+    3. Delete from Weaviate if deletion is not skipped
     """
     stats = {
       "processed": len(listing_ids),
@@ -46,24 +74,19 @@ class ListingReconciliation:
       "errors": 0
     }
 
-    # Get active listings from ES
-    active_listings = self.es_client.get_active_listings(listing_ids)
-    active_listing_ids = {doc['jumpId'] for doc in active_listings}
-
-     # Free memory as soon as active_listings is no longer needed
-    del active_listings
-    gc.collect()
+    # Get active listings (either from ES or file)
+    active_listing_ids = self.load_or_fetch_active_listings(listing_ids)
 
     # Identify listings to delete
     to_delete = list(filter(lambda x: x not in active_listing_ids, listing_ids))
     stats["to_delete"] = len(to_delete)
 
-    if not to_delete:
+    if not to_delete or self.skip_deletion:
       return stats
 
     try:
       # Reduce batch size dynamically
-      batch_size = min(10, len(to_delete))   # Small safe batch
+      batch_size = min(10, len(to_delete))  # Small safe batch
       deletion_stats = self.datastore.delete_listings_by_batch(
         listing_ids=to_delete,
         batch_size=batch_size,
@@ -89,7 +112,6 @@ class ListingReconciliation:
     """
     start_time = datetime.now()
     total_stats = {
-      # "total_listings": 0,
       "total_processed": 0,
       "total_objects_deleted": 0,
       "total_errors": 0,
@@ -142,6 +164,7 @@ class ListingReconciliation:
       total_stats["error"] = str(e)
 
     return total_stats
+
 # Example usage:
 # reconciler = ListingReconciliation(weaviate_datastore, es_client)
 # stats = reconciler.reconcile(max_listings=10000)  # Process first 10k listings
