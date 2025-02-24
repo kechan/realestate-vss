@@ -1,5 +1,6 @@
-from typing import List, Set, Dict, Any, Optional, Iterator
-import logging, gc
+from typing import List, Set, Dict, Any, Optional, Iterator, Union
+import logging, gc, json
+from pathlib import Path
 from datetime import datetime
 import time
 
@@ -18,7 +19,7 @@ class ListingReconciliation:
     max_batches: Optional[int] = None,
     sleep_time: float = 1.0,
     skip_deletion: bool = False,  # Option to skip actual deletion
-    es_snapshot_file: Optional[str] = None  # File to store ES query results
+    es_snapshot_file: Optional[Union[str, Path]] = None  # File to store ES query results
   ):
     self.datastore = weaviate_datastore
     self.es_client = es_client
