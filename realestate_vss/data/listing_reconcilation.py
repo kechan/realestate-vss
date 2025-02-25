@@ -50,13 +50,19 @@ class ListingReconciliation:
       # Read the snapshot file and return its contents.
       if self.es_snapshot_file is None: 
         raise ValueError("Snapshot file path is required in snapshot-only mode!")
-      try:
-        with open(self.es_snapshot_file, 'r') as f:
-          active_listing_ids = set(json.load(f))
-        self.logger.info("Loaded active listings from snapshot file (snapshot-only mode).")
-      except (FileNotFoundError, json.JSONDecodeError):
-        self.logger.warning("Snapshot file not found or corrupted in snapshot-only mode!")
-        active_listing_ids = set()
+
+      if hasattr(self, '_cached_snapshot'):
+        active_listing_ids = self._cached_snapshot
+      else:
+        try:
+          with open(self.es_snapshot_file, 'r') as f:
+            active_listing_ids = set(json.load(f))
+          self.logger.info("Loaded active listings from snapshot file (snapshot-only mode).")
+        except (FileNotFoundError, json.JSONDecodeError):
+          self.logger.warning("Snapshot file not found or corrupted in snapshot-only mode!")
+          active_listing_ids = set()
+        self._cached_snapshot = active_listing_ids
+      
       return active_listing_ids
 
     # Otherwise, query ES for active listings for the current batch.
