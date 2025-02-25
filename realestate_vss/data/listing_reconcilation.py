@@ -58,8 +58,8 @@ class ListingReconciliation:
       with open(self.es_snapshot_file, 'a') as f:
         existing_data = []
         try:
-            with open(self.es_snapshot_file, 'r') as f:
-                existing_data = json.load(f)
+            with open(self.es_snapshot_file, 'r') as ff:
+                existing_data = json.load(ff)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         existing_data.extend(listing_ids)
