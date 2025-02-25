@@ -55,7 +55,7 @@ class ListingReconciliation:
     active_listing_ids = {doc['jumpId'] for doc in active_listings}
     
     if self.es_snapshot_file:
-      with open(self.es_snapshot_file, 'w') as f:
+      with open(self.es_snapshot_file, 'a') as f:
         json.dump(list(active_listing_ids), f)
       self.logger.info("Saved active listings snapshot to disk.")
     
