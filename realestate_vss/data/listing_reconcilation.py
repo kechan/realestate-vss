@@ -19,7 +19,8 @@ class ListingReconciliation:
     max_batches: Optional[int] = None,
     sleep_time: float = 1.0,
     skip_deletion: bool = False,  # Option to skip actual deletion
-    es_snapshot_file: Optional[Union[str, Path]] = None  # File to store ES query results
+    es_snapshot_file: Optional[Union[str, Path]] = None,  # File to store ES query results
+    use_snapshot_only=False
   ):
     self.datastore = weaviate_datastore
     self.es_client = es_client
@@ -28,6 +29,7 @@ class ListingReconciliation:
     self.sleep_time = sleep_time
     self.skip_deletion = skip_deletion
     self.es_snapshot_file = es_snapshot_file
+    self.use_snapshot_only = use_snapshot_only
     self.logger = logging.getLogger(__name__)
 
   def get_all_weaviate_listing_ids(self) -> Iterator[str]:
@@ -40,32 +42,48 @@ class ListingReconciliation:
 
   def load_or_fetch_active_listings(self, listing_ids: List[str]) -> Set[str]:
     """
-    Load active listings from file if available, otherwise fetch from ES and store.
+    Either query ES for active listings for the current batch (and update the snapshot file)
+    or, if use_snapshot_only is True, simply load the active listings from the snapshot file.
+    In either case, only the current batch's active listings are returned.
     """
-    if self.es_snapshot_file:
+    if self.use_snapshot_only:
+      # Read the snapshot file and return its contents.
+      if self.es_snapshot_file is None: 
+        raise ValueError("Snapshot file path is required in snapshot-only mode!")
       try:
         with open(self.es_snapshot_file, 'r') as f:
           active_listing_ids = set(json.load(f))
-        self.logger.info("Loaded active listings from snapshot file.")
-        return active_listing_ids
+        self.logger.info("Loaded active listings from snapshot file (snapshot-only mode).")
       except (FileNotFoundError, json.JSONDecodeError):
-        self.logger.warning("ES snapshot file not found or corrupted! Querying ES.")
-    
+        self.logger.warning("Snapshot file not found or corrupted in snapshot-only mode!")
+        active_listing_ids = set()
+      return active_listing_ids
+
+    # Otherwise, query ES for active listings for the current batch.
     active_listings = self.es_client.get_active_listings(listing_ids)
     active_listing_ids = {doc['jumpId'] for doc in active_listings}
-    
+
     if self.es_snapshot_file:
-      with open(self.es_snapshot_file, 'a') as f:
-        existing_data = []
-        try:
-            with open(self.es_snapshot_file, 'r') as ff:
-                existing_data = json.load(ff)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-        existing_data.extend(listing_ids)
-        json.dump(sorted(set(existing_data)), f)
-    
+      try:
+        # Open the snapshot file in read/write mode to update it.
+        with open(self.es_snapshot_file, 'r+') as f:
+          try:
+            existing_data = json.load(f)
+          except (FileNotFoundError, json.JSONDecodeError):
+            existing_data = []
+          # Merge the previous active listing IDs with the current batch results.
+          updated_data = sorted(set(existing_data) | active_listing_ids)
+          f.seek(0)
+          f.truncate()
+          json.dump(updated_data, f)
+      except FileNotFoundError:
+        # If the file does not exist, create it and write the current active IDs.
+        with open(self.es_snapshot_file, 'w') as f:
+          json.dump(sorted(active_listing_ids), f)
+
+    # Return only the current batch's active listings.
     return active_listing_ids
+
 
   def process_batch(self, listing_ids: List[str]) -> Dict[str, Any]:
     """
