@@ -56,8 +56,14 @@ class ListingReconciliation:
     
     if self.es_snapshot_file:
       with open(self.es_snapshot_file, 'a') as f:
-        json.dump(list(active_listing_ids), f)
-      self.logger.info("Saved active listings snapshot to disk.")
+        existing_data = []
+        try:
+            with open(self.es_snapshot_file, 'r') as f:
+                existing_data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        existing_data.extend(listing_ids)
+        json.dump(sorted(set(existing_data)), f)
     
     return active_listing_ids
 
