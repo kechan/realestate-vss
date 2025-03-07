@@ -839,7 +839,18 @@ async def many_image_search(files: List[UploadFile] = File(...)) -> List[Dict[st
 
 @app.post("/multi-image-search")
 async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)) -> List[ListingSearchResult]:
-  
+  """
+  Endpoint to perform a multi-image search.
+  This endpoint accepts multiple image files and an optional query body in JSON format. It processes the images and query to perform a search and returns a list of listing search results.
+  Args:
+    files (List[UploadFile]): A list of image files to be used in the search.
+    query_body (Optional[str]): The query to search by text in format of {"phrase": "search phrase"}
+  Returns:
+    List[ListingSearchResult]: A list of search results based on the provided images and query parameters.
+  Raises:
+    JSONDecodeError: If the query_body is not a valid JSON string.
+    Exception: If there is an error processing the images or performing the search.
+  """
   images: List[Image.Image] = []
   for file in files:
     image_data = await file.read()
@@ -849,7 +860,7 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     except Exception as e:
       return f'error: Invalid image file {file.filename}'
     
-  if query_body is not None:
+  if query_body is not None and query_body != '':
     try:
       query = json.loads(query_body)
       logger.info(f'before cleanup: {query}')
@@ -899,12 +910,12 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
 
   Parameters:
   file (UploadFile): The image file to search by image.
-  query_body (dict): The query to search by text in format of {"phrase": "<search term>"}
+  query_body (dict): The query to search by text in format of {"phrase": "search phrase"}
 
   """
   
   image = None
-  if file is not None:
+  if file is not None and file.filename != '':
     image_data = await file.read()
     try:
       image = Image.open(io.BytesIO(image_data))
@@ -912,7 +923,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       image = None
       return f'error: Invalid image file {file.filename}'
     
-  if query_body is not None:
+  if query_body is not None and query_body != '':
     try:
       query = json.loads(query_body)
       logger.info(f'before cleanup: {query}')
