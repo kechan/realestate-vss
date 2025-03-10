@@ -915,7 +915,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
   """
   
   image = None
-  if file is not None and file.filename != '':
+  if isinstance(file, UploadFile) and file.filename != '':
     image_data = await file.read()
     try:
       image = Image.open(io.BytesIO(image_data))
