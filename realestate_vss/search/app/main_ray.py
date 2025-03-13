@@ -58,8 +58,8 @@ logger.propagate = False
 '''
 
 # app = FastAPI()
-# uvicorn main:app --port 8002 --reload &  # run this in terminal to start the server
-# uvicorn main:app --host 0.0.0.0 --port 8002 --reload  (demo on GCP)
+# uvicorn main_ray:app --port 8002 --reload &  # run this in terminal to start the server
+# uvicorn main_ray:app --host 0.0.0.0 --port 8002 --reload  (demo on GCP)
 
 # Set up CORS middleware configuration
 _ = load_dotenv(find_dotenv())
@@ -114,9 +114,11 @@ else:
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
 
+# Determine whether to use a GPU automatically based on PyTorch's CUDA availability
+num_gpus = 1 if torch.cuda.is_available() else 0   # on a mac, its 0 since its mps
+
 # Ray Serve deployment for model inference
-@serve.deployment(num_replicas=1, ray_actor_options={"num_gpus": 0})  # mac
-# @serve.deployment(num_replicas=1, ray_actor_options={"num_gpus": 1}) # gcp
+@serve.deployment(num_replicas=1, ray_actor_options={"num_gpus": num_gpus})
 class OpenCLIPModelServer:
   def __init__(self):
     from realestate_vss.models.embedding import OpenClipImageEmbeddingModel, OpenClipTextEmbeddingModel

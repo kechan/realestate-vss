@@ -974,7 +974,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     return total_processed
   
   @retry(**RETRY_SETTINGS)
-  def raw_import_all(self, input_path: Path, embedding_type: str, batch_size=1000, sleep_time=0.5) -> int:
+  def raw_import_all(self, input_path: Path, embedding_type: str, batch_size=1000, sleep_time=0.5, max_chunks=None) -> int:
     """
     Import data previously exported using raw_export_all back into Weaviate.
     Handles multiple pickle files in format input_path_N.pkl.
@@ -985,6 +985,7 @@ class WeaviateDataStore_v4(WeaviateDataStore):
       embedding_type: Required string indicating collection type ('I' for images, 'T' for text)
       batch_size: Number of items to process in each batch
       sleep_time: Sleep time between batches to prevent overload
+      max_chunks: Maximum number of chunk files to process (None for no limit)
     
     Returns:
       int: Total number of records imported
@@ -1004,6 +1005,10 @@ class WeaviateDataStore_v4(WeaviateDataStore):
     chunk_num = 0
 
     while True:
+      if max_chunks is not None and chunk_num >= max_chunks:
+        self.logger.info(f"Reached max_chunks limit ({max_chunks}). Stopping import.")
+        break
+      
       chunk_file = Path(f"{input_path}_{chunk_num}.pkl")
       if not chunk_file.exists():
         break
