@@ -269,13 +269,14 @@ async def setup_async_weaviate():
   global image_embedder, text_embedder, datastore
 
   if use_local_weaviate:
-    async_client = weaviate.use_async_with_local(WEAVIATE_HOST, WEAVIATE_PORT)
-    await async_client.connect()
+    async_client = weaviate.use_async_with_local(WEAVIATE_HOST, WEAVIATE_PORT)    
   else:
     async_client = weaviate.use_async_with_weaviate_cloud(
       cluster_url=WCS_URL,
       auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
     )
+  
+  await async_client.connect()
 
   datastore = AsyncWeaviateDataStore(async_client=async_client, 
                                     image_embedder=image_embedder, 
