@@ -157,7 +157,10 @@ class OpenCLIPModelServer:
       
   async def __call__(self, request):
     try:
-      data = await request.json()
+      if isinstance(request, dict):
+        data = request
+      else:
+        data = await request.json()
       
       if "type" not in data:
         return {"error": "Missing 'type' field. Must be 'image' or 'text'"}
@@ -246,13 +249,14 @@ async def setup_async_weaviate():
   global datastore
   
   if use_local_weaviate:
-    async_client = weaviate.use_async_with_local(WEAVIATE_HOST, WEAVIATE_PORT)
-    await async_client.connect()
+    async_client = weaviate.use_async_with_local(WEAVIATE_HOST, WEAVIATE_PORT)    
   else:
     async_client = weaviate.use_async_with_weaviate_cloud(
       cluster_url=WCS_URL,
       auth_credentials=weaviate.auth.AuthApiKey(WCS_API_KEY)
     )
+
+  await async_client.connect()
 
   datastore = AsyncWeaviateDataStore(async_client=async_client, image_embedder=None, text_embedder=None)
   return datastore
