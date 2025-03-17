@@ -443,6 +443,18 @@ async def prepare_image_for_ray(image: Image.Image):
 
 @app.post("/multi-image-search")
 async def multi_image_search(query_body: Optional[str] = Form(None), files: List[UploadFile] = File(...)) -> List[ListingSearchResult]:
+  """
+  Endpoint to perform a multi-image search.
+  This endpoint accepts multiple image files and an optional query body in JSON format. It processes the images and query to perform a search and returns a list of listing search results.
+  Args:
+    files (List[UploadFile]): A list of image files to be used in the search.
+    query_body (Optional[str]): The query to search by text in format of {"phrase": "search phrase"}
+  Returns:
+    List[ListingSearchResult]: A list of search results based on the provided images and query parameters.
+  Raises:
+    JSONDecodeError: If the query_body is not a valid JSON string.
+    Exception: If there is an error processing the images or performing the search.
+  """
   images: List[Image.Image] = []
   for file in files:
     image_data = await file.read()
@@ -513,6 +525,11 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
 async def search(query_body: Optional[str] = Form(None), file: UploadFile = None) -> List[ListingSearchResult]:
   """
   One search to rule them all (full cross modality)
+
+  Parameters:
+  file (UploadFile): The image file to search by image.
+  query_body (dict): The query to search by text in format of {"phrase": "search phrase"}
+
   """
   image = None
   image_embedding = None
