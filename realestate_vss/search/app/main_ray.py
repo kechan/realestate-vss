@@ -4,7 +4,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
-import ray
+import ray, base64
 from ray import serve
 import httpx
 import asyncio, io, json, os
@@ -169,8 +169,6 @@ class OpenCLIPModelServer:
         if "image_bytes" not in data:
           return {"error": "Missing 'image_bytes' field for image embedding"}
         
-        # Decode base64 if needed
-        import base64
         image_bytes = base64.b64decode(data["image_bytes"])
         
         embedding = self.embed_image(image_bytes)
@@ -437,7 +435,6 @@ async def prepare_image_for_ray(image: Image.Image):
   resized_image.save(buffer, format="JPEG", quality=95)
   buffer.seek(0)
 
-  import base64
   return base64.b64encode(buffer.getvalue()).decode('utf-8')
 
 
