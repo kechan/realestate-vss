@@ -149,7 +149,7 @@ class OpenCLIPModelServer:
       
   @serve.batch(max_batch_size=MAX_BATCH_SIZE, batch_wait_timeout_s=BATCH_WAIT_TIMEOUT)
   async def __call__(self, request: Union[List[Request], List[Dict]]) -> List[List[float]]:
-   """
+    """
     Expects a list of requests where each request is either a Starlette Request
     or a dict of the form:
       {"type": "image", "image_bytes": <base64 encoded bytes>}
