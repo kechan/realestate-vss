@@ -9,6 +9,10 @@ import json
 import random
 from collections import namedtuple
 
+# Configurable constants
+NUM_REQUESTS_PER_BATCH = 5  # Number of requests per batch
+TEST_DURATION_SECONDS = 60  # Total duration of the test in seconds
+
 # Global flag to switch between threading and multiprocessing
 use_thread = False  # Set to False to use processes instead
 
@@ -84,14 +88,14 @@ def launch_threaded_requests():
   results = []
   threads = []
 
-  selected_images = random.sample(images, 5)
-  selected_phrases = [generate_random_phrase() for _ in range(5)]
+  selected_images = random.sample(images, NUM_REQUESTS_PER_BATCH)
+  selected_phrases = [generate_random_phrase() for _ in range(NUM_REQUESTS_PER_BATCH)]
 
   def target(image_path, phrase, index):
     result = send_request(image_path, phrase)
     results.append((index, result))
 
-  for i in range(5):
+  for i in range(NUM_REQUESTS_PER_BATCH):
     t = threading.Thread(target=target, args=(selected_images[i], selected_phrases[i], i))
     threads.append(t)
     t.start()
@@ -106,10 +110,10 @@ def launch_process_requests():
   result_queue = mp.Queue()
   processes = []
   
-  selected_images = random.sample(images, 5)
-  selected_phrases = [generate_random_phrase() for _ in range(5)]
+  selected_images = random.sample(images, NUM_REQUESTS_PER_BATCH)
+  selected_phrases = [generate_random_phrase() for _ in range(NUM_REQUESTS_PER_BATCH)]
   
-  for i in range(5):
+  for i in range(NUM_REQUESTS_PER_BATCH):
     p = mp.Process(
       target=send_request,
       args=(selected_images[i], selected_phrases[i], i, result_queue)
@@ -118,7 +122,7 @@ def launch_process_requests():
     p.start()
   
   results = []
-  for _ in range(5):
+  for _ in range(NUM_REQUESTS_PER_BATCH):
     results.append(result_queue.get())
   
   for p in processes:
@@ -135,7 +139,7 @@ def main():
   print(f"\nStarting performance test using {'threads' if use_thread else 'processes'}...")
   print("=" * 80)
 
-  for i in range(60):  # Run for 60 seconds
+  for i in range(TEST_DURATION_SECONDS):  # Run for TEST_DURATION_SECONDS
     batch_start_time = time.time()
     batch_results = launch_requests()
     batch_elapsed = time.time() - batch_start_time

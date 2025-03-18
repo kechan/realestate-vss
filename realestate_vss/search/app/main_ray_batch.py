@@ -172,8 +172,8 @@ class OpenCLIPModelServer:
       
         if item_type == "image":         
           # Decode the base64 image bytes
-          image_bytes = base64.b64decode(item["image_bytes"])
-          image_bytes_list.append(image_bytes)
+          # image_bytes = base64.b64decode(item["image_bytes"])
+          image_bytes_list.append(item["image_bytes"])
           image_indices.append(idx)
 
         elif item_type == "text":
@@ -285,9 +285,11 @@ async def startup_event():
     dummy_image = Image.new('RGB', (224, 224))
     buffer = BytesIO()
     dummy_image.save(buffer, format="JPEG")
-    image_bytes_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    buffer.seek(0)
+    image_bytes = buffer.getvalue()   # send raw bytes
+    # image_bytes_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
     
-    image_warmup_embedding = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
+    image_warmup_embedding = await handle.remote({"type": "image", "image_bytes": image_bytes})
     # logger.info(f'Warmup image response: {image_warmup_embedding}')
     
     # Also warm up the datastore
@@ -446,8 +448,8 @@ async def prepare_image_for_ray(image: Image.Image):
   resized_image.save(buffer, format="JPEG", quality=95)
   buffer.seek(0)
 
-  import base64
-  return base64.b64encode(buffer.getvalue()).decode('utf-8')
+  # return base64.b64encode(buffer.getvalue()).decode('utf-8')
+  return buffer.getvalue()
 
 
 @app.post("/multi-image-search")
@@ -495,8 +497,9 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     # Get embeddings for each image from Ray
     image_embeddings = []
     for image in images:
-      image_bytes_b64 = await prepare_image_for_ray(image)
-      response = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
+      # image_bytes_b64 = await prepare_image_for_ray(image)
+      image_bytes = await prepare_image_for_ray(image)
+      response = await handle.remote({"type": "image", "image_bytes": image_bytes})
       
       if response == [-1]:
         raise Exception(f"Ray Serve error: {response}")
@@ -548,8 +551,9 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       image = Image.open(BytesIO(image_data))
       
       # Get embedding from Ray Serve for the image
-      image_bytes_b64 = await prepare_image_for_ray(image)
-      response = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
+      # image_bytes_b64 = await prepare_image_for_ray(image)
+      image_bytes = await prepare_image_for_ray(image)
+      response = await handle.remote({"type": "image", "image_bytes": image_bytes})
       # logger.info(f"image_response type: {type(response)}, value: {response}")
       
       if response == [-1]:
