@@ -30,6 +30,9 @@ from google.auth.exceptions import DefaultCredentialsError
 import logging
 from logging.handlers import RotatingFileHandler
 
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)
+
 logging.basicConfig(
   level=logging.INFO,
   format='%(asctime)s [%(levelname)s] [Logger: %(name)s]: %(message)s',
@@ -1004,3 +1007,11 @@ async def sanity_check() -> str:
   message += f'Searching remarks for {n_remarks} listings'
 
   return message
+
+
+
+# if __name__ == "__main__":
+#     import multiprocessing as mp
+#     mp.set_start_method('spawn', force=True)
+#     import uvicorn
+#     uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=True)
