@@ -279,7 +279,7 @@ async def startup_event():
     # Send warmup requests to Ray
     warmup_text = "dummy warmup text"
     warmup_embedding = await handle.remote({"type": "text", "text": warmup_text})
-    logger.info(f'Warmup text response: {warmup_embedding}')
+    # logger.info(f'Warmup text response: {warmup_embedding}')
     
     # Create a small dummy image
     dummy_image = Image.new('RGB', (224, 224))
@@ -288,7 +288,7 @@ async def startup_event():
     image_bytes_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
     
     image_warmup_embedding = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
-    logger.info(f'Warmup image response: {image_warmup_embedding}')
+    # logger.info(f'Warmup image response: {image_warmup_embedding}')
     
     # Also warm up the datastore
     await datastore._search_text_2_text(
@@ -550,7 +550,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       # Get embedding from Ray Serve for the image
       image_bytes_b64 = await prepare_image_for_ray(image)
       response = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
-      logger.info(f"image_response type: {type(response)}, value: {response}")
+      # logger.info(f"image_response type: {type(response)}, value: {response}")
       
       if response == [-1]:
         raise Exception(f"Ray Serve error: {response}")
@@ -574,7 +574,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       if phrase is not None:
         # Get embedding from Ray Serve for the text
         text_response = await handle.remote({"type": "text", "text": phrase})
-        logger.info(f"text_response type: {type(text_response)}, value: {text_response}")
+        # logger.info(f"text_response type: {type(text_response)}, value: {text_response}")
         
         if text_response == [-1]:
           raise Exception(f"Ray Serve error: {text_response}")
