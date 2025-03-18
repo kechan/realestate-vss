@@ -148,13 +148,13 @@ class OpenCLIPModelServer:
       raise ValueError(f"Failed to embed text: {str(e)}")
       
   @serve.batch(max_batch_size=MAX_BATCH_SIZE, batch_wait_timeout_s=BATCH_WAIT_TIMEOUT)
-  async def __call__(self, request: Union[List[Request], List[Dict]]) -> Dict[str, List[List[float]]]:
-    """
-    .remote({"type": "text", "text": warmup_text})    
-    .remote({"type": "image", "image_bytes": image_bytes_b64})
-
-    list of dict like [{"type": "image", "image_bytes": image_bytes_b64}, {"type": "text", "text": "dummy warmup text"}]
-      
+  async def __call__(self, request: Union[List[Request], List[Dict]]) -> List[List[float]]:
+   """
+    Expects a list of requests where each request is either a Starlette Request
+    or a dict of the form:
+      {"type": "image", "image_bytes": <base64 encoded bytes>}
+      {"type": "text", "text": "dummy warmup text"}
+    Returns a list of embeddings in the same order.
     """
     try:
       if isinstance(request[0], Request):
@@ -190,11 +190,12 @@ class OpenCLIPModelServer:
       for pos, emb in zip(text_indices, text_embeddings):
         results[pos] = emb
 
-      return {"embedding": results}
+      return results
     
     except Exception as e:
       logger.error(f"Error processing request: {e}")
-      return {"error": str(e)}
+      # Return an error message for each input.
+      return [[-1]] * len(data)
 
 
 # Deploy Ray serve model
@@ -277,20 +278,21 @@ async def startup_event():
   try:
     # Send warmup requests to Ray
     warmup_text = "dummy warmup text"
-    warmup_response = await handle.remote({"type": "text", "text": warmup_text})
+    warmup_embedding = await handle.remote({"type": "text", "text": warmup_text})
+    logger.info(f'Warmup text response: {warmup_embedding}')
     
     # Create a small dummy image
     dummy_image = Image.new('RGB', (224, 224))
     buffer = BytesIO()
     dummy_image.save(buffer, format="JPEG")
-    import base64
     image_bytes_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
     
-    image_warmup_response = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
+    image_warmup_embedding = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
+    logger.info(f'Warmup image response: {image_warmup_embedding}')
     
     # Also warm up the datastore
     await datastore._search_text_2_text(
-      embedding=warmup_response["embedding"],
+      embedding=image_warmup_embedding,
       topk=1,
       group_by_listingId=True,
       include_all_fields=True,
@@ -496,10 +498,10 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
       image_bytes_b64 = await prepare_image_for_ray(image)
       response = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
       
-      if "error" in response:
-        raise Exception(f"Ray Serve error: {response['error']}")
+      if response == [-1]:
+        raise Exception(f"Ray Serve error: {response}")
       
-      image_embeddings.append(response["embedding"])
+      image_embeddings.append(response)
     
     # Average the embeddings
     image_embedding = np.mean(image_embeddings, axis=0).tolist()
@@ -509,10 +511,10 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     if phrase is not None:
       text_response = await handle.remote({"type": "text", "text": phrase})
       
-      if "error" in text_response:
-        raise Exception(f"Ray Serve error: {text_response['error']}")
+      if text_response == [-1]:
+        raise Exception(f"Ray Serve error: {text_response}")
       
-      text_embedding = text_response["embedding"]
+      text_embedding = text_response
     
     listings = await datastore.multi_image_search(
       image_embedding=image_embedding, 
@@ -548,11 +550,12 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       # Get embedding from Ray Serve for the image
       image_bytes_b64 = await prepare_image_for_ray(image)
       response = await handle.remote({"type": "image", "image_bytes": image_bytes_b64})
+      logger.info(f"image_response type: {type(response)}, value: {response}")
       
-      if "error" in response:
-        raise Exception(f"Ray Serve error: {response['error']}")
+      if response == [-1]:
+        raise Exception(f"Ray Serve error: {response}")
       
-      image_embedding = response["embedding"]
+      image_embedding = response
     except Exception as e:
       image = None
       raise HTTPException(status_code=400, detail=f"Invalid image file: {file.filename}")
@@ -571,11 +574,12 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       if phrase is not None:
         # Get embedding from Ray Serve for the text
         text_response = await handle.remote({"type": "text", "text": phrase})
+        logger.info(f"text_response type: {type(text_response)}, value: {text_response}")
         
-        if "error" in text_response:
-          raise Exception(f"Ray Serve error: {text_response['error']}")
+        if text_response == [-1]:
+          raise Exception(f"Ray Serve error: {text_response}")
         
-        text_embedding = text_response["embedding"]
+        text_embedding = text_response
         del query['phrase']
         
     except json.JSONDecodeError:
