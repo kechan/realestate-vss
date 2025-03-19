@@ -447,6 +447,10 @@ async def prepare_image_for_ray(image: Image.Image):
   # Resize using LANCZOS filter for high-quality downsampling
   resized_image = image.resize((new_width, new_height), Image.LANCZOS)
 
+  # Ensure image is in RGB mode (convert RGBA → RGB if necessary)
+  if resized_image.mode == "RGBA":
+    resized_image = resized_image.convert("RGB")
+
   buffer = BytesIO()
   resized_image.save(buffer, format="JPEG", quality=95)
   buffer.seek(0)
