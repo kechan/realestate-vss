@@ -101,11 +101,14 @@ MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "8"))
 BATCH_WAIT_TIMEOUT = float(os.getenv("BATCH_WAIT_TIMEOUT", "0.1"))
 
 # Determine whether to use a GPU automatically based on PyTorch's CUDA availability
-num_gpus = 1 if torch.cuda.is_available() else 0   # on a mac, its 0 since its mps
+# num_gpus = 1 if torch.cuda.is_available() else 0   # on a mac, its 0 since its mps
+
+num_replicas = 4 if torch.cuda.is_available() else 1
+gpu_fraction = 1/num_replicas if torch.cuda.is_available() else 0
 
 # Ray Serve deployment for model inference
-@serve.deployment(num_replicas=1, 
-                  ray_actor_options={"num_gpus": num_gpus},
+@serve.deployment(num_replicas=num_replicas, 
+                  ray_actor_options={"num_gpus": gpu_fraction},
                   max_ongoing_requests=MAX_BATCH_SIZE
                   )
 class OpenCLIPModelServer:
