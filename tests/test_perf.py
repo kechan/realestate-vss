@@ -10,7 +10,7 @@ import random
 from collections import namedtuple
 
 # Configurable constants
-NUM_REQUESTS_PER_BATCH = 5  # Number of requests per batch
+NUM_REQUESTS_PER_BATCH = 20  # Number of requests per batch
 TEST_DURATION_SECONDS = 60  # Total duration of the test in seconds
 
 # Global flag to switch between threading and multiprocessing
@@ -26,7 +26,9 @@ image_dir = Path('data')
 # Prepare a list of image file paths
 images = [image_dir / img_name for img_name in [
   'bathroom-with-fireplace.jpg', 'nice_kitchen.jpeg', 'ugly_kitchen.jpg', 'cn_tower.jpg', 'niagara_fall.jpeg',
-  'cn_tower_2.jpg', 'cn_tower_3.jpeg', 'ev_charger_port_perry.jpeg', 'resized_cn_tower.jpg', '13280246_7.jpg'
+  'cn_tower_2.jpg', 'cn_tower_3.jpeg', 'ev_charger_port_perry.jpeg', 'resized_cn_tower.jpg', '13280246_7.jpg',
+  'tesla_in_garage.jpg', 'infinity_pool.jpg', 'IMG_0846.jpeg', 'mls202324861.jpg', '18489643_28.jpg',
+  '109_Bottomley_Ave_N_Saskatoon_SK.jpg', 'testing.jpg', 'cat.jpg', '1405397457296.jpeg', '1405375881692.jpeg'
 ]]
 
 def generate_random_phrase():
@@ -39,13 +41,12 @@ def generate_random_phrase():
   ]
   return random.choice(phrases)
 
-def send_request(image_path: Path, phrase: str, index: int = None, result_queue: Queue = None) -> RequestResult:
+def send_request(image_path: Path, phrase: str, index: int = None, result_queue: Queue = None):
   """Unified request sender that works for both threading and multiprocessing"""
   start_time = time.time()
   files = {}
   f = None
   try:
-    # Create a new session for process-based clients
     session = requests if use_thread else requests.Session()
     
     f = image_path.open('rb')
@@ -60,19 +61,18 @@ def send_request(image_path: Path, phrase: str, index: int = None, result_queue:
     result = RequestResult(latency, response.status_code, result_size)
     
     if not use_thread:
-      # For multiprocessing, return via queue
-      result_queue.put((index, result))
+      result_queue.put((index, image_path.name, result))
       if not isinstance(session, type(requests)):
         session.close()
-    return result
+    return (index, image_path.name, result)
     
   except Exception as e:
     print(f"Error during request: {e}")
     latency = time.time() - start_time
     result = RequestResult(latency, None, 0)
     if not use_thread:
-      result_queue.put((index, result))
-    return result
+      result_queue.put((index, image_path.name, result))
+    return (index, image_path.name, result)
   finally:
     if f:
       f.close()
@@ -93,7 +93,7 @@ def launch_threaded_requests():
 
   def target(image_path, phrase, index):
     result = send_request(image_path, phrase)
-    results.append((index, result))
+    results.append(result)  # Store (index, image_name, result)
 
   for i in range(NUM_REQUESTS_PER_BATCH):
     t = threading.Thread(target=target, args=(selected_images[i], selected_phrases[i], i))
@@ -125,9 +125,6 @@ def launch_process_requests():
   for _ in range(NUM_REQUESTS_PER_BATCH):
     results.append(result_queue.get())
   
-  for p in processes:
-    p.join()
-  
   results.sort(key=lambda x: x[0])
   return results
 
@@ -135,6 +132,7 @@ def main():
   total_results = []
   total_requests = 0
   total_errors = 0
+  error_images = []
 
   print(f"\nStarting performance test using {'threads' if use_thread else 'processes'}...")
   print("=" * 80)
@@ -145,18 +143,23 @@ def main():
     batch_elapsed = time.time() - batch_start_time
     total_results.extend(batch_results)
     total_requests += len(batch_results)
-    errors_in_batch = sum(1 for _, result in batch_results if result.status != 200)
+    errors_in_batch = sum(1 for _, _, result in batch_results if result.status != 200)
     total_errors += errors_in_batch
 
     # Print batch results
     print(f'\nBatch {i+1}:')
     print("-" * 40)
-    for index, result in batch_results:
+    for index, image_name, result in batch_results:
       status_display = result.status if result.status is not None else 'Error'
       print(f'  {"Thread" if use_thread else "Process"} {index+1}: '
             f'Latency = {result.latency*1000:.2f} ms, '
             f'Status = {status_display}, '
-            f'Results = {result.result_size}')
+            f'Results = {result.result_size}, '
+            f'Image = {image_name}')
+      
+      if result.status != 200:
+        error_images.append(image_name)
+
     print(f'Batch {i+1} completed in {batch_elapsed:.2f} seconds with {errors_in_batch} errors.')
 
     # Sleep to maintain 1-second intervals
@@ -166,7 +169,7 @@ def main():
   # Print final statistics
   print("\nFinal Results")
   print("=" * 80)
-  successful_results = [result for _, result in total_results if result.status == 200]
+  successful_results = [result for _, _, result in total_results if result.status == 200]
   
   if successful_results:
     successful_latencies = [result.latency for result in successful_results]
@@ -184,6 +187,12 @@ def main():
     print(f'Total requests: {total_requests}')
     print(f'Successful requests: {len(successful_results)}')
     print(f'Failed requests: {total_errors}')
+    
+    if error_images:
+      print(f'\nImages responsible for errors:')
+      for img in set(error_images):  # Print unique error-causing images
+        print(f'  - {img}')
+    
     print(f'\nLatency Statistics:')
     print(f'  Average: {avg_latency*1000:.2f} ms')
     print(f'  Min: {min_latency*1000:.2f} ms')
@@ -196,6 +205,6 @@ def main():
     print('All requests failed.')
 
 if __name__ == '__main__':
-  # Required for Windows
   mp.freeze_support()
   main()
+
