@@ -103,7 +103,7 @@ BATCH_WAIT_TIMEOUT = float(os.getenv("BATCH_WAIT_TIMEOUT", "0.1"))
 # Determine whether to use a GPU automatically based on PyTorch's CUDA availability
 # num_gpus = 1 if torch.cuda.is_available() else 0   # on a mac, its 0 since its mps
 
-num_replicas = 4 if torch.cuda.is_available() else 1
+num_replicas = 2 if torch.cuda.is_available() else 1
 gpu_fraction = 1/num_replicas if torch.cuda.is_available() else 0
 
 # Ray Serve deployment for model inference
@@ -433,19 +433,22 @@ async def get_image(listingId: str, image_name: str) -> FileResponse:
     raise HTTPException(status_code=404, detail=f"Image not found: {listingId}/{image_name}")
 
 # Helper function to encode image for Ray Serve
-async def prepare_image_for_ray(image: Image.Image):
-  # Resize image to optimize transfer to Ray
-  width, height = image.size
-  # Compute new dimensions: shortest side = 224 (preserving aspect ratio)
-  if width < height:
-    new_width = 224
-    new_height = int((height / width) * 224)
-  else:
-    new_height = 224
-    new_width = int((width / height) * 224)
+async def prepare_image_for_ray(image: Image.Image, resize=True) -> bytes:
+  if resize:
+    # Resize image to optimize transfer to Ray
+    width, height = image.size
+    # Compute new dimensions: shortest side = 224 (preserving aspect ratio)
+    if width < height:
+      new_width = 224
+      new_height = int((height / width) * 224)
+    else:
+      new_height = 224
+      new_width = int((width / height) * 224)
 
-  # Resize using LANCZOS filter for high-quality downsampling
-  resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+    # Resize using LANCZOS filter for high-quality downsampling
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+  else:
+    resized_image = image
 
   # Ensure image is in RGB mode (convert RGBA → RGB if necessary)
   if resized_image.mode == "RGBA":
