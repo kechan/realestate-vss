@@ -97,8 +97,8 @@ else:
 model_name = 'ViT-L-14'
 pretrained = 'laion2b_s32b_b82k'
 
-MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "8"))
-BATCH_WAIT_TIMEOUT = float(os.getenv("BATCH_WAIT_TIMEOUT", "0.1"))
+MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "12"))
+BATCH_WAIT_TIMEOUT = float(os.getenv("BATCH_WAIT_TIMEOUT", "0.05"))
 
 # Determine whether to use a GPU automatically based on PyTorch's CUDA availability
 # num_gpus = 1 if torch.cuda.is_available() else 0   # on a mac, its 0 since its mps
@@ -508,7 +508,7 @@ async def multi_image_search(query_body: Optional[str] = Form(None), files: List
     image_embeddings = []
     for image in images:
       # image_bytes_b64 = await prepare_image_for_ray(image)
-      image_bytes = await prepare_image_for_ray(image)
+      image_bytes = await prepare_image_for_ray(image, resize=False)
       response = await handle.remote({"type": "image", "image_bytes": image_bytes})
       
       if response == [-1]:
@@ -562,7 +562,7 @@ async def search(query_body: Optional[str] = Form(None), file: UploadFile = None
       
       # Get embedding from Ray Serve for the image
       # image_bytes_b64 = await prepare_image_for_ray(image)
-      image_bytes = await prepare_image_for_ray(image)
+      image_bytes = await prepare_image_for_ray(image, resize=False)
       response = await handle.remote({"type": "image", "image_bytes": image_bytes})
       # logger.info(f"image_response type: {type(response)}, value: {response}")
       
