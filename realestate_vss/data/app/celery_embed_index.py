@@ -35,10 +35,12 @@ MAX_LISTING_TO_EMBED_INDEX = 1000
 _ = load_dotenv(find_dotenv())
 # Get Redis host (for result backend) from .env or fall back to 127.0.0.1
 REDIS_HOST = os.getenv('CELERY_BACKEND_REDIS_HOST_IP', '127.0.0.1')
+REDIS_PORT = os.getenv('CELERY_BACKEND_REDIS_PORT', '6379')
+REDIS_DB_INDEX = os.getenv('CELERY_BACKEND_REDIS_DB_INDEX', '1')
 
 if os.getenv('CELERY_ENABLE_RESULT_BACKEND', 'false').lower() == 'true':
-  celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//', backend=f'redis://{REDIS_HOST}:6379/1')
-  # celery.conf.result_backend = f'redis://{REDIS_HOST}:6379/1'
+  celery = Celery('embed_index_app', broker='pyamqp://guest@localhost//', backend=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_INDEX}')
+  # celery.conf.result_backend = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_INDEX}'
   celery.conf.result_expires = 86400*7  # 7 days = 86400 * 7 seconds
   celery.conf.task_track_started = True
 else:

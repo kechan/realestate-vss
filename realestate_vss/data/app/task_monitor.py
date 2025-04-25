@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from realestate_vss.utils.email import send_email_alert
 
 class TaskMonitor:
-  def __init__(self, redis_host: str = 'localhost', redis_port: int = 6379):
+  def __init__(self, redis_host: str = 'localhost', redis_port: int = 6379, db: int = 1):
     self.redis = redis.Redis(host=redis_host, port=redis_port, db=1)
 
   def get_task_info(self, task_id: str) -> dict:
@@ -93,7 +93,9 @@ class TaskMonitor:
 
 def main():
   monitor = TaskMonitor(
-    redis_host=os.getenv('CELERY_BACKEND_REDIS_HOST_IP', 'localhost')
+    redis_host=os.getenv('CELERY_BACKEND_REDIS_HOST_IP', 'localhost'),
+    redis_port=int(os.getenv('CELERY_BACKEND_REDIS_PORT', 6379)),
+    db=int(os.getenv('CELERY_BACKEND_REDIS_DB_INDEX', 1))
   )
   monitor.check_tasks()
 

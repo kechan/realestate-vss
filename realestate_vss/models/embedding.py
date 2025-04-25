@@ -3,6 +3,7 @@ from pathlib import Path
 from itertools import chain
 
 import open_clip, torch
+from open_clip.model import CLIP
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 # from torchvision import transforms
@@ -148,7 +149,7 @@ class ListingTextDataset(Dataset):
 
 class OpenClipEmbeddingModel:
   def __init__(self, model_name:str=None, pretrained:str=None, 
-               embedding_model: Optional['OpenClipEmbeddingModel']=None,
+               embedding_model: Optional[Union['OpenClipEmbeddingModel', CLIP]] = None,
                device=torch.device('cpu'),
                state_dict_path: Optional[Path]=None,
                weight_quant_type = qint8,
@@ -183,13 +184,22 @@ class OpenClipEmbeddingModel:
       self.model.eval()
       
     else:
-      if not isinstance(embedding_model, OpenClipEmbeddingModel):
-        raise TypeError('embedding_model must be an instance of OpenClipEmbeddingModel')
-      self.model_name = embedding_model.model_name
-      self.pretrained = embedding_model.pretrained
-      self.model = embedding_model.model
-      self.preprocess = embedding_model.preprocess
-      self.device = embedding_model.device
+      if isinstance(embedding_model, OpenClipEmbeddingModel):
+        self.model_name = embedding_model.model_name
+        self.pretrained = embedding_model.pretrained
+        self.model = embedding_model.model
+        self.preprocess = embedding_model.preprocess
+        self.device = embedding_model.device
+      elif isinstance(embedding_model, CLIP):
+        self.device = device
+        self.model_name = model_name
+        self.pretrained = pretrained
+        _, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
+        self.model = embedding_model.to(self.device)
+        self.preprocess = preprocess
+        self.model.eval()
+      else:
+        raise TypeError('embedding_model must be an instance of OpenClipEmbeddingModel or CLIP')
 
 class OpenClipImageEmbeddingModel(OpenClipEmbeddingModel):
   def __init__(self, *args, **kwargs):
