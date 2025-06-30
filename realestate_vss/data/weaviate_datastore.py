@@ -371,7 +371,7 @@ class WeaviateDataStore:
     return combined_results
 
   def _get_weaviate_filters(self, **filters):
-    supported_keys = ['provState', 'city', 'bedsInt', 'bathsInt', 'price']
+    supported_keys = ['provState', 'city', 'bedsInt', 'bathsInt', 'price', 'leasePrice', 'transactionType']
 
     weaviate_filters = None
     for k, v in filters.items():
